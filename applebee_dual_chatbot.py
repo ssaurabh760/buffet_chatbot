@@ -265,7 +265,7 @@ with tab3:
     
     # Model paths
     model_path = "./models/model.h5"
-    tokenizer_path = "./models/tokenizer_vocab"
+    tokenizer_path = "./models/tokenizer_vocab.subwords"
     
     # Check if model exists
     model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path)
