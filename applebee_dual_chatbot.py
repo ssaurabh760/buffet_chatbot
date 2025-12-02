@@ -268,7 +268,7 @@ with tab3:
     tokenizer_path = "./models/tokenizer_vocab"
     
     # Check if model exists
-    model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path + ".subwords")
+    model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path)
     
     if not model_exists:
         st.warning("⚠️ Model files not found!")
