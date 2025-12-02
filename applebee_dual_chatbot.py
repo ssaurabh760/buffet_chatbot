@@ -262,13 +262,13 @@ with tab3:
         2. Ensure model files are in the correct location
         """)
         st.stop()
-    
+        
     # Model paths
     model_path = "./models/model.h5"
     tokenizer_path = "./models/tokenizer_vocab"
     
     # Check if model exists
-    model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path)
+    model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path + ".subwords")
     
     if not model_exists:
         st.warning("⚠️ Model files not found!")
