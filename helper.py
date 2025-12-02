@@ -1,8 +1,15 @@
+"""
+Helper module for Warren Buffett Chatbot
+Contains all custom layers, functions, and utilities for model inference
+"""
+
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 import tensorflow_datasets as tfds
 import re
 import os
+
+print("✅ Helper module loaded")
 
 # =============================================================================
 # POSITIONAL ENCODING LAMBDA FUNCTION
@@ -30,6 +37,8 @@ def add_pos_enc(x):
 # =============================================================================
 
 class PositionalEncoding(tf.keras.layers.Layer):
+    """Custom positional encoding layer."""
+    
     def __init__(self, position, d_model, **kwargs):
         super(PositionalEncoding, self).__init__(**kwargs)
         self.position = position
@@ -85,6 +94,8 @@ def scaled_dot_product_attention(query, key, value, mask):
 # =============================================================================
 
 class MultiHeadAttentionLayer(tf.keras.layers.Layer):
+    """Custom multi-head attention layer."""
+    
     def __init__(self, d_model, num_heads, **kwargs):
         assert d_model % num_heads == 0
         super(MultiHeadAttentionLayer, self).__init__(**kwargs)
@@ -151,10 +162,12 @@ class MultiHeadAttentionLayer(tf.keras.layers.Layer):
 # =============================================================================
 
 def create_padding_mask(x):
+    """Create padding mask for padding tokens."""
     mask = tf.cast(tf.math.equal(x, 0), tf.float32)
     return mask[:, tf.newaxis, tf.newaxis, :]
 
 def create_look_ahead_mask(x):
+    """Create look-ahead mask to prevent attending to future tokens."""
     seq_len = tf.shape(x)[1]
     look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
     padding_mask = create_padding_mask(x)
@@ -164,28 +177,50 @@ def create_look_ahead_mask(x):
 # TOKENIZER AND CONFIG (Lazy Load)
 # =============================================================================
 
-MAX_LENGTH = 78
+MAX_LENGTH = 80
 _tokenizer = None
 START_TOKEN = None
 END_TOKEN = None
 VOCAB_SIZE = None
 
 def get_tokenizer():
-    """Lazy load tokenizer - only when needed."""
+    """
+    Lazy load tokenizer - only when needed.
+    Tries multiple paths for flexibility.
+    """
     global _tokenizer, START_TOKEN, END_TOKEN, VOCAB_SIZE
     
     if _tokenizer is None:
-        try:
-            _tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('./models/tokenizer_vocab')
-            START_TOKEN = [_tokenizer.vocab_size]
-            END_TOKEN = [_tokenizer.vocab_size + 1]
-            VOCAB_SIZE = _tokenizer.vocab_size + 2
-        except Exception as e:
+        # Try different possible tokenizer paths
+        possible_paths = [
+            './models/tokenizer_vocab',
+            'models/tokenizer_vocab',
+            '/models/tokenizer_vocab',
+        ]
+        
+        tokenizer_loaded = False
+        for path in possible_paths:
+            try:
+                if any(os.path.exists(f"{path}{ext}") for ext in ['', '.subwords']):
+                    _tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(path)
+                    tokenizer_loaded = True
+                    break
+            except:
+                continue
+        
+        if not tokenizer_loaded:
             raise FileNotFoundError(
-                f"Could not load tokenizer from './models/tokenizer_vocab'\n"
-                f"Error: {str(e)}\n"
+                f"Could not load tokenizer!\n"
+                f"Tried paths: {possible_paths}\n"
                 f"Make sure tokenizer_vocab.subwords exists in ./models/ directory"
             )
+        
+        # Initialize tokens
+        START_TOKEN = [_tokenizer.vocab_size]
+        END_TOKEN = [_tokenizer.vocab_size + 1]
+        VOCAB_SIZE = _tokenizer.vocab_size + 2
+        
+        print(f"✅ Tokenizer loaded! Vocab size: {VOCAB_SIZE}")
     
     return _tokenizer
 
@@ -194,6 +229,7 @@ def get_tokenizer():
 # =============================================================================
 
 def preprocess_sentence(sentence):
+    """Preprocess text for model input."""
     sentence = sentence.lower().strip()
     sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
     sentence = re.sub(r'[" "]+', " ", sentence)
@@ -223,20 +259,26 @@ def preprocess_sentence(sentence):
 # =============================================================================
 
 def evaluate(sentence, model):
+    """
+    Generate model output for input sentence using auto-regressive decoding.
+    """
     tokenizer = get_tokenizer()
     sentence = preprocess_sentence(sentence)
 
+    # Tokenize input
     sentence = tf.expand_dims(
         START_TOKEN + tokenizer.encode(sentence) + END_TOKEN, axis=0
     )
 
     output = tf.expand_dims(START_TOKEN, 0)
 
+    # Auto-regressive generation
     for i in range(MAX_LENGTH):
         predictions = model(inputs=[sentence, output], training=False)
         predictions = predictions[:, -1:, :]
         predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
+        # Stop if END token is predicted
         if tf.equal(predicted_id, END_TOKEN[0]):
             break
 
@@ -245,9 +287,72 @@ def evaluate(sentence, model):
     return tf.squeeze(output, axis=0)
 
 def predict(sentence, model):
-    tokenizer = get_tokenizer()
-    prediction = evaluate(sentence, model)
-    predicted_sentence = tokenizer.decode(
-        [i for i in prediction if i < tokenizer.vocab_size]
-    )
-    return predicted_sentence
+    """
+    Generate text prediction from model.
+    
+    Args:
+        sentence: Input text string
+        model: Trained transformer model
+        
+    Returns:
+        Generated response text
+    """
+    try:
+        tokenizer = get_tokenizer()
+        prediction = evaluate(sentence, model)
+        
+        # Decode tokens back to text
+        predicted_sentence = tokenizer.decode(
+            [i for i in prediction if i < tokenizer.vocab_size]
+        )
+        
+        return predicted_sentence
+    
+    except Exception as e:
+        print(f"Error during prediction: {str(e)}")
+        return f"I encountered an error processing your question: {str(e)}"
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+def load_model_safe(model_path):
+    """
+    Safely load model from SavedModel or H5 format.
+    
+    Args:
+        model_path: Path to model directory or file
+        
+    Returns:
+        Loaded keras model
+    """
+    custom_objects = {
+        "PositionalEncoding": PositionalEncoding,
+        "MultiHeadAttentionLayer": MultiHeadAttentionLayer,
+        "create_padding_mask": create_padding_mask,
+        "create_look_ahead_mask": create_look_ahead_mask,
+        "scaled_dot_product_attention": scaled_dot_product_attention,
+        "add_pos_enc": add_pos_enc,
+    }
+    
+    try:
+        # Try SavedModel format first
+        if os.path.isdir(model_path):
+            model = tf.keras.models.load_model(model_path)
+            print(f"✅ Loaded SavedModel from {model_path}")
+            return model
+        
+        # Fall back to H5 format
+        elif model_path.endswith('.h5') or model_path.endswith('.keras'):
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+            print(f"✅ Loaded H5 model from {model_path}")
+            return model
+        
+        else:
+            raise ValueError(f"Unknown model format: {model_path}")
+    
+    except Exception as e:
+        print(f"❌ Error loading model: {str(e)}")
+        raise
+
+print("✅ All helper functions initialized!")
