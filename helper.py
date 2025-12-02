@@ -2,10 +2,13 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 import tensorflow_datasets as tfds
 import re
+import os
 
+# =============================================================================
+# POSITIONAL ENCODING LAMBDA FUNCTION
+# =============================================================================
 
-# Positional encoding function used in Lambda layers
-D_MODEL = 256  # ← IMPORTANT: Must match your training!
+D_MODEL = 256
 
 def add_pos_enc(x):
     """Positional encoding for Lambda layers."""
@@ -22,6 +25,10 @@ def add_pos_enc(x):
     )
     return x + angles[tf.newaxis, :, :]
 
+# =============================================================================
+# POSITIONAL ENCODING CLASS
+# =============================================================================
+
 class PositionalEncoding(tf.keras.layers.Layer):
     def __init__(self, position, d_model, **kwargs):
         super(PositionalEncoding, self).__init__(**kwargs)
@@ -31,12 +38,10 @@ class PositionalEncoding(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super(PositionalEncoding, self).get_config()
-        config.update(
-            {
-                "position": self.position,
-                "d_model": self.d_model,
-            }
-        )
+        config.update({
+            "position": self.position,
+            "d_model": self.d_model,
+        })
         return config
 
     def get_angles(self, position, i, d_model):
@@ -49,11 +54,8 @@ class PositionalEncoding(tf.keras.layers.Layer):
             i=tf.range(d_model, dtype=tf.float32)[tf.newaxis, :],
             d_model=d_model,
         )
-        # apply sin to even index in the array
         sines = tf.math.sin(angle_rads[:, 0::2])
-        # apply cos to odd index in the array
         cosines = tf.math.cos(angle_rads[:, 1::2])
-
         pos_encoding = tf.concat([sines, cosines], axis=-1)
         pos_encoding = pos_encoding[tf.newaxis, ...]
         return tf.cast(pos_encoding, tf.float32)
@@ -61,25 +63,26 @@ class PositionalEncoding(tf.keras.layers.Layer):
     def call(self, inputs):
         return inputs + self.pos_encoding[:, : tf.shape(inputs)[1], :]
 
+# =============================================================================
+# ATTENTION FUNCTIONS
+# =============================================================================
 
 def scaled_dot_product_attention(query, key, value, mask):
     """Calculate the attention weights."""
     matmul_qk = tf.matmul(query, key, transpose_b=True)
-
-    # scale matmul_qk
     depth = tf.cast(tf.shape(key)[-1], tf.float32)
     logits = matmul_qk / tf.math.sqrt(depth)
 
-    # add the mask to zero out padding tokens
     if mask is not None:
         logits += mask * -1e9
 
-    # softmax is normalized on the last axis (seq_len_k)
     attention_weights = tf.nn.softmax(logits, axis=-1)
-
     output = tf.matmul(attention_weights, value)
-
     return output
+
+# =============================================================================
+# MULTI-HEAD ATTENTION LAYER
+# =============================================================================
 
 class MultiHeadAttentionLayer(tf.keras.layers.Layer):
     def __init__(self, d_model, num_heads, **kwargs):
@@ -87,23 +90,19 @@ class MultiHeadAttentionLayer(tf.keras.layers.Layer):
         super(MultiHeadAttentionLayer, self).__init__(**kwargs)
         self.num_heads = num_heads
         self.d_model = d_model
-
         self.depth = d_model // self.num_heads
 
         self.query_dense = tf.keras.layers.Dense(units=d_model)
         self.key_dense = tf.keras.layers.Dense(units=d_model)
         self.value_dense = tf.keras.layers.Dense(units=d_model)
-
         self.dense = tf.keras.layers.Dense(units=d_model)
 
     def get_config(self):
         config = super(MultiHeadAttentionLayer, self).get_config()
-        config.update(
-            {
-                "num_heads": self.num_heads,
-                "d_model": self.d_model,
-            }
-        )
+        config.update({
+            "num_heads": self.num_heads,
+            "d_model": self.d_model,
+        })
         return config
 
     def split_heads(self, inputs, batch_size):
@@ -125,37 +124,34 @@ class MultiHeadAttentionLayer(tf.keras.layers.Layer):
         )
         batch_size = tf.shape(query)[0]
 
-        # linear layers
         query = self.query_dense(query)
         key = self.key_dense(key)
         value = self.value_dense(value)
 
-        # split heads
         query = self.split_heads(query, batch_size)
         key = self.split_heads(key, batch_size)
         value = self.split_heads(value, batch_size)
 
-        # scaled dot-product attention
         scaled_attention = scaled_dot_product_attention(query, key, value, mask)
         scaled_attention = tf.keras.layers.Lambda(
             lambda scaled_attention: tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
         )(scaled_attention)
 
-        # concatenation of heads
         concat_attention = tf.keras.layers.Lambda(
             lambda scaled_attention: tf.reshape(
                 scaled_attention, (batch_size, -1, self.d_model)
             )
         )(scaled_attention)
 
-        # final linear layer
         outputs = self.dense(concat_attention)
-
         return outputs
+
+# =============================================================================
+# MASK FUNCTIONS
+# =============================================================================
 
 def create_padding_mask(x):
     mask = tf.cast(tf.math.equal(x, 0), tf.float32)
-    # (batch_size, 1, 1, sequence length)
     return mask[:, tf.newaxis, tf.newaxis, :]
 
 def create_look_ahead_mask(x):
@@ -164,30 +160,43 @@ def create_look_ahead_mask(x):
     padding_mask = create_padding_mask(x)
     return tf.maximum(look_ahead_mask, padding_mask)
 
+# =============================================================================
+# TOKENIZER AND CONFIG (Lazy Load)
+# =============================================================================
+
 MAX_LENGTH = 78
-# Lazy load tokenizer - only load when needed
 _tokenizer = None
+START_TOKEN = None
+END_TOKEN = None
+VOCAB_SIZE = None
 
 def get_tokenizer():
-    global _tokenizer
+    """Lazy load tokenizer - only when needed."""
+    global _tokenizer, START_TOKEN, END_TOKEN, VOCAB_SIZE
+    
     if _tokenizer is None:
-        _tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('./models/tokenizer_vocab')
+        try:
+            _tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('./models/tokenizer_vocab')
+            START_TOKEN = [_tokenizer.vocab_size]
+            END_TOKEN = [_tokenizer.vocab_size + 1]
+            VOCAB_SIZE = _tokenizer.vocab_size + 2
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Could not load tokenizer from './models/tokenizer_vocab'\n"
+                f"Error: {str(e)}\n"
+                f"Make sure tokenizer_vocab.subwords exists in ./models/ directory"
+            )
+    
     return _tokenizer
 
-# Use this in functions that need tokenizer
-tokenizer = None  # Placeholder
-
-START_TOKEN, END_TOKEN = [tokenizer.vocab_size], [tokenizer.vocab_size + 1]
-
-VOCAB_SIZE = tokenizer.vocab_size + 2
+# =============================================================================
+# TEXT PREPROCESSING
+# =============================================================================
 
 def preprocess_sentence(sentence):
     sentence = sentence.lower().strip()
-    # creating a space between a word and the punctuation following it
-    # eg: "he is a boy." => "he is a boy ."
     sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
     sentence = re.sub(r'[" "]+', " ", sentence)
-    # removing contractions
     sentence = re.sub(r"i'm", "i am", sentence)
     sentence = re.sub(r"he's", "he is", sentence)
     sentence = re.sub(r"she's", "she is", sentence)
@@ -200,19 +209,21 @@ def preprocess_sentence(sentence):
     sentence = re.sub(r"\'ve", " have", sentence)
     sentence = re.sub(r"\'re", " are", sentence)
     sentence = re.sub(r"\'d", " would", sentence)
-    sentence = re.sub(r"\'re", " are", sentence)
     sentence = re.sub(r"won't", "will not", sentence)
     sentence = re.sub(r"can't", "cannot", sentence)
     sentence = re.sub(r"n't", " not", sentence)
     sentence = re.sub(r"n'", "ng", sentence)
     sentence = re.sub(r"'bout", "about", sentence)
-    # replacing everything with space except (a-z, A-Z, ".", "?", "!", ",")
     sentence = re.sub(r"[^a-zA-Z?.!,]+", " ", sentence)
     sentence = sentence.strip()
     return sentence
 
+# =============================================================================
+# MODEL INFERENCE
+# =============================================================================
+
 def evaluate(sentence, model):
-    tokenizer = get_tokenizer() 
+    tokenizer = get_tokenizer()
     sentence = preprocess_sentence(sentence)
 
     sentence = tf.expand_dims(
@@ -223,21 +234,15 @@ def evaluate(sentence, model):
 
     for i in range(MAX_LENGTH):
         predictions = model(inputs=[sentence, output], training=False)
-
-        # select the last word from the seq_len dimension
         predictions = predictions[:, -1:, :]
         predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
-        # return the result if the predicted_id is equal to the end token
         if tf.equal(predicted_id, END_TOKEN[0]):
             break
 
-        # concatenated the predicted_id to the output which is given to the decoder
-        # as its input.
         output = tf.concat([output, predicted_id], axis=-1)
 
     return tf.squeeze(output, axis=0)
-
 
 def predict(sentence, model):
     tokenizer = get_tokenizer()
