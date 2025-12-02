@@ -8,6 +8,7 @@ from helper import (
     create_padding_mask,
     create_look_ahead_mask,
     scaled_dot_product_attention,
+    add_pos_enc, 
     predict
 )
 
@@ -18,6 +19,7 @@ model = load_model('./models/model.h5', custom_objects={
     "create_padding_mask": create_padding_mask,
     "create_look_ahead_mask": create_look_ahead_mask,
     "scaled_dot_product_attention": scaled_dot_product_attention,
+    "add_pos_enc": add_pos_enc,  
 })
 
 if "ti" not in st.session_state:

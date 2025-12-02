@@ -41,6 +41,23 @@ class PositionalEncoding(tf.keras.layers.Layer):
 
     def call(self, inputs):
         return inputs + self.pos_encoding[:, : tf.shape(inputs)[1], :]
+    # Positional encoding function used in Lambda layers
+    D_MODEL = 256  # ← IMPORTANT: Must match your training!
+
+    def add_pos_enc(x):
+        """Positional encoding for Lambda layers."""
+        seq_length = tf.shape(x)[1]
+        position = tf.range(seq_length, dtype=tf.float32)[:, tf.newaxis]
+        dim_indices = tf.range(D_MODEL, dtype=tf.float32)[tf.newaxis, :]
+        angles = position / tf.pow(
+            10000.0, (2 * (dim_indices // 2)) / tf.cast(D_MODEL, tf.float32)
+        )
+        angles = tf.where(
+            tf.cast(dim_indices, tf.int32) % 2 == 0,
+            tf.sin(angles),
+            tf.cos(angles),
+        )
+        return x + angles[tf.newaxis, :, :]
 
 def scaled_dot_product_attention(query, key, value, mask):
     """Calculate the attention weights."""
