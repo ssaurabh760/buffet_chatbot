@@ -7,7 +7,10 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 from typing import Dict, Optional
-import requests
+import numpy as np
+import warnings
+
+warnings.filterwarnings('ignore')
 
 class FinancialAnalyzer:
     """Analyze stocks using Warren Buffett's financial ratio criteria."""
@@ -16,7 +19,7 @@ class FinancialAnalyzer:
         self.ticker = ticker.upper()
         
         try:
-            self.stock = yf.Ticker(self.ticker)  # ✅ That's all
+            self.stock = yf.Ticker(self.ticker)
             self.info = self.stock.info
         except Exception as e:
             st.error(f"Could not fetch data for {ticker}: {str(e)}")
@@ -29,16 +32,12 @@ class FinancialAnalyzer:
             if self.stock is None:
                 return pd.DataFrame()
             
-            income_stmt = self.stock.quarterly_financials
-            if income_stmt.empty:
-                income_stmt = self.stock.financials  # Try annual if quarterly not available
-            
-            if income_stmt.empty:
+            financials = self.stock.financials
+            if financials.empty:
                 return pd.DataFrame()
             
-            return income_stmt.iloc[:, 0]  # Most recent period
+            return financials
         except Exception as e:
-            st.warning(f"Could not fetch income statement: {str(e)}")
             return pd.DataFrame()
     
     def get_balance_sheet(self) -> pd.DataFrame:
@@ -47,16 +46,12 @@ class FinancialAnalyzer:
             if self.stock is None:
                 return pd.DataFrame()
             
-            balance = self.stock.quarterly_balance_sheet
-            if balance.empty:
-                balance = self.stock.balance_sheet  # Try annual if quarterly not available
-            
-            if balance.empty:
+            balance_sheet = self.stock.balance_sheet
+            if balance_sheet.empty:
                 return pd.DataFrame()
             
-            return balance.iloc[:, 0]  # Most recent period
+            return balance_sheet
         except Exception as e:
-            st.warning(f"Could not fetch balance sheet: {str(e)}")
             return pd.DataFrame()
     
     def get_cash_flow(self) -> pd.DataFrame:
@@ -65,16 +60,12 @@ class FinancialAnalyzer:
             if self.stock is None:
                 return pd.DataFrame()
             
-            cash_flow = self.stock.quarterly_cashflow
-            if cash_flow.empty:
-                cash_flow = self.stock.cashflow  # Try annual if quarterly not available
-            
-            if cash_flow.empty:
+            cashflow = self.stock.cashflow
+            if cashflow.empty:
                 return pd.DataFrame()
             
-            return cash_flow.iloc[:, 0]  # Most recent period
+            return cashflow
         except Exception as e:
-            st.warning(f"Could not fetch cash flow: {str(e)}")
             return pd.DataFrame()
     
     def calculate_ratios(self) -> Dict:
@@ -86,131 +77,231 @@ class FinancialAnalyzer:
             return {}
         
         try:
-            income = self.get_income_statement()
+            financials = self.get_income_statement()
+            balance_sheet = self.get_balance_sheet()
+            cashflow = self.get_cash_flow()
             
-            if income.empty:
-                st.error("No income statement data available for this ticker")
+            if financials.empty or balance_sheet.empty or cashflow.empty:
+                st.error("Insufficient financial data available for this ticker")
                 return {}
             
-            # Get necessary values with multiple possible field names
-            revenue = income.get('Total Revenue', income.get('Operating Revenue', 0))
-            gross_profit = income.get('Gross Profit', 0)
-            
-            # Operating expense might be under different names
-            sga_expense = income.get('Operating Expense', income.get('Selling General And Administration', 0))
-            rd_expense = income.get('Research Development', income.get('Research And Development', 0))
-            depreciation = income.get('Depreciation', income.get('Depreciation And Amortization', 0))
-            
-            operating_income = income.get('Operating Income', 0)
-            interest_expense = income.get('Interest Expense', 0)
-            taxes = income.get('Tax Provision', income.get('Income Tax Expense', 0))
-            net_income = income.get('Net Income', 0)
-            
-            # Safe division helper
-            def safe_div(num, denom, default=None):
-                if denom == 0 or denom is None or num is None:
-                    return default
-                if num < 0 or denom < 0:  # Skip negative values
-                    return default
-                return (num / denom) * 100
-            
-            # 1. Gross Margin
-            ratios['Gross Margin'] = {
-                'value': safe_div(gross_profit, revenue),
-                'benchmark': 40,
-                'rule': '>= 40%',
-                'logic': "Signals the company isn't competing on price.",
-                'unit': '%'
-            }
-            
-            # 2. SG&A Expense Margin
-            ratios['SGA Margin'] = {
-                'value': safe_div(sga_expense, gross_profit),
-                'benchmark': 30,
-                'rule': '<= 30%',
-                'logic': "Wide-moat companies don't need high overhead.",
-                'unit': '%'
-            }
-            
-            # 3. R&D Expense Margin
-            ratios['R&D Margin'] = {
-                'value': safe_div(rd_expense, gross_profit),
-                'benchmark': 30,
-                'rule': '<= 30%',
-                'logic': "R&D doesn't always create shareholder value.",
-                'unit': '%'
-            }
-            
-            # 4. Depreciation Margin
-            ratios['Depreciation Margin'] = {
-                'value': safe_div(depreciation, gross_profit),
-                'benchmark': 10,
-                'rule': '<= 10%',
-                'logic': "Buffett avoids asset-heavy businesses.",
-                'unit': '%'
-            }
-            
-            # 5. Interest Expense Margin
-            if operating_income and operating_income > 0:
-                int_margin = (interest_expense / operating_income) * 100 if interest_expense else 0
-            else:
-                int_margin = None
-                
-            ratios['Interest Margin'] = {
-                'value': int_margin,
-                'benchmark': 15,
-                'rule': '<= 15%',
-                'logic': "Great businesses don't need debt.",
-                'unit': '%'
-            }
-            
-            # 6. Tax Rate
-            if revenue and revenue > 0:
-                try:
-                    pre_tax_income = (operating_income or 0) - (interest_expense or 0)
-                    if pre_tax_income and pre_tax_income > 0 and taxes:
-                        tax_rate = (taxes / pre_tax_income) * 100
-                    else:
-                        tax_rate = None
-                except:
-                    tax_rate = None
-            else:
-                tax_rate = None
-                
-            ratios['Tax Rate'] = {
-                'value': tax_rate,
-                'benchmark': 21,  # Current US corporate tax rate
-                'rule': '≈ 21%',
-                'logic': "Profitable companies pay their full tax load.",
-                'unit': '%'
-            }
-            
-            # 7. Net Profit Margin
-            ratios['Net Margin'] = {
-                'value': safe_div(net_income, revenue),
-                'benchmark': 20,
-                'rule': '>= 20%',
-                'logic': "Great companies convert 20%+ revenue to profit.",
-                'unit': '%'
-            }
-            
-            # 8. EPS Growth (using available data)
+            # INCOME STATEMENT METRICS
             try:
-                eps = self.info.get('trailingEps', None)
-                ratios['Current EPS'] = {
-                    'value': eps,
-                    'benchmark': None,
-                    'rule': 'Positive & Growing',
-                    'logic': "Great companies increase profits yearly.",
-                    'unit': '$'
+                gross_profit = financials.loc['Gross Profit'].iloc[0]
+                total_revenue = financials.loc['Total Revenue'].iloc[0]
+                ratios['Gross Margin'] = {
+                    'value': (gross_profit / total_revenue) * 100 if total_revenue != 0 else None,
+                    'benchmark': 40,
+                    'rule': '>= 40%',
+                    'logic': "Signals the company isn't competing on price.",
+                    'unit': '%'
                 }
             except:
-                ratios['Current EPS'] = {
+                ratios['Gross Margin'] = {
+                    'value': None,
+                    'benchmark': 40,
+                    'rule': '>= 40%',
+                    'logic': "Signals the company isn't competing on price.",
+                    'unit': '%'
+                }
+            
+            try:
+                sga = financials.loc['Selling General And Administration'].iloc[0]
+                ratios['SGA Margin'] = {
+                    'value': (sga / gross_profit) * 100 if gross_profit != 0 else None,
+                    'benchmark': 30,
+                    'rule': '<= 30%',
+                    'logic': "Wide-moat companies don't need high overhead.",
+                    'unit': '%'
+                }
+            except:
+                ratios['SGA Margin'] = {
+                    'value': None,
+                    'benchmark': 30,
+                    'rule': '<= 30%',
+                    'logic': "Wide-moat companies don't need high overhead.",
+                    'unit': '%'
+                }
+            
+            try:
+                rnd = financials.loc['Research And Development'].iloc[0]
+                ratios['R&D Margin'] = {
+                    'value': (rnd / gross_profit) * 100 if gross_profit != 0 else None,
+                    'benchmark': 30,
+                    'rule': '<= 30%',
+                    'logic': "R&D doesn't always create shareholder value.",
+                    'unit': '%'
+                }
+            except:
+                ratios['R&D Margin'] = {
+                    'value': None,
+                    'benchmark': 30,
+                    'rule': '<= 30%',
+                    'logic': "R&D doesn't always create shareholder value.",
+                    'unit': '%'
+                }
+            
+            try:
+                depreciation = financials.loc['Reconciled Depreciation'].iloc[0]
+                ratios['Depreciation Margin'] = {
+                    'value': (depreciation / gross_profit) * 100 if gross_profit != 0 else None,
+                    'benchmark': 10,
+                    'rule': '<= 10%',
+                    'logic': "Buffett avoids asset-heavy businesses.",
+                    'unit': '%'
+                }
+            except:
+                ratios['Depreciation Margin'] = {
+                    'value': None,
+                    'benchmark': 10,
+                    'rule': '<= 10%',
+                    'logic': "Buffett avoids asset-heavy businesses.",
+                    'unit': '%'
+                }
+            
+            try:
+                interest_expense = financials.loc['Interest Expense'].iloc[0]
+                operating_income = financials.loc['Operating Income'].iloc[0]
+                ratios['Interest Margin'] = {
+                    'value': (interest_expense / operating_income) * 100 if operating_income != 0 else None,
+                    'benchmark': 15,
+                    'rule': '<= 15%',
+                    'logic': "Great businesses don't need debt.",
+                    'unit': '%'
+                }
+            except:
+                ratios['Interest Margin'] = {
+                    'value': None,
+                    'benchmark': 15,
+                    'rule': '<= 15%',
+                    'logic': "Great businesses don't need debt.",
+                    'unit': '%'
+                }
+            
+            try:
+                tax_provision = financials.loc['Tax Provision'].iloc[0]
+                pretax_income = financials.loc['Pretax Income'].iloc[0]
+                ratios['Tax Rate'] = {
+                    'value': (tax_provision / pretax_income) * 100 if pretax_income != 0 else None,
+                    'benchmark': 21,
+                    'rule': '≈ 21%',
+                    'logic': "Profitable companies pay their full tax load.",
+                    'unit': '%'
+                }
+            except:
+                ratios['Tax Rate'] = {
+                    'value': None,
+                    'benchmark': 21,
+                    'rule': '≈ 21%',
+                    'logic': "Profitable companies pay their full tax load.",
+                    'unit': '%'
+                }
+            
+            try:
+                net_income = financials.loc['Net Income'].iloc[0]
+                ratios['Net Margin'] = {
+                    'value': (net_income / total_revenue) * 100 if total_revenue != 0 else None,
+                    'benchmark': 20,
+                    'rule': '>= 20%',
+                    'logic': "Great companies convert 20%+ revenue to profit.",
+                    'unit': '%'
+                }
+            except:
+                ratios['Net Margin'] = {
+                    'value': None,
+                    'benchmark': 20,
+                    'rule': '>= 20%',
+                    'logic': "Great companies convert 20%+ revenue to profit.",
+                    'unit': '%'
+                }
+            
+            try:
+                if len(financials.columns) > 1:
+                    eps_current = financials.loc['Basic EPS'].iloc[0]
+                    eps_previous = financials.loc['Basic EPS'].iloc[1]
+                    ratios['EPS Growth'] = {
+                        'value': eps_current / eps_previous if eps_previous != 0 else None,
+                        'benchmark': 1.0,
+                        'rule': '> 1.0 (Growing)',
+                        'logic': "Great companies increase profits yearly.",
+                        'unit': ''
+                    }
+                else:
+                    ratios['EPS Growth'] = {
+                        'value': None,
+                        'benchmark': 1.0,
+                        'rule': '> 1.0 (Growing)',
+                        'logic': "Great companies increase profits yearly.",
+                        'unit': ''
+                    }
+            except:
+                ratios['EPS Growth'] = {
+                    'value': None,
+                    'benchmark': 1.0,
+                    'rule': '> 1.0 (Growing)',
+                    'logic': "Great companies increase profits yearly.",
+                    'unit': ''
+                }
+            
+            # BALANCE SHEET METRICS
+            try:
+                cash = balance_sheet.loc['Cash And Cash Equivalents'].iloc[0]
+                total_debt = balance_sheet.loc['Total Debt'].iloc[0]
+                ratios['Cash vs Debt'] = {
+                    'value': cash > total_debt,
+                    'cash': cash,
+                    'debt': total_debt,
+                    'benchmark': True,
+                    'rule': 'Cash > Debt',
+                    'logic': "Strong financial position.",
+                    'unit': ''
+                }
+            except:
+                ratios['Cash vs Debt'] = {
+                    'value': None,
+                    'benchmark': True,
+                    'rule': 'Cash > Debt',
+                    'logic': "Strong financial position.",
+                    'unit': ''
+                }
+            
+            try:
+                total_assets = balance_sheet.loc['Total Assets'].iloc[0]
+                total_liabilities = balance_sheet.loc['Total Liabilities'].iloc[0]
+                stockholder_equity = balance_sheet.loc['Stockholders Equity'].iloc[0]
+                ratios['Debt to Equity'] = {
+                    'value': (total_liabilities / stockholder_equity) if stockholder_equity != 0 else None,
+                    'benchmark': 0.80,
+                    'rule': '< 0.80',
+                    'logic': "Lower debt burden.",
+                    'unit': ''
+                }
+            except:
+                ratios['Debt to Equity'] = {
+                    'value': None,
+                    'benchmark': 0.80,
+                    'rule': '< 0.80',
+                    'logic': "Lower debt burden.",
+                    'unit': ''
+                }
+            
+            try:
+                capex = cashflow.loc['Capital Expenditure'].iloc[0]
+                net_income_ops = financials.loc['Net Income From Continuing Operations'].iloc[0]
+                ratios['CapEx Margin'] = {
+                    'value': (abs(capex) / net_income_ops) * 100 if net_income_ops != 0 else None,
+                    'benchmark': None,
+                    'rule': 'Lower is better',
+                    'logic': "Less reinvestment needed.",
+                    'unit': '%'
+                }
+            except:
+                ratios['CapEx Margin'] = {
                     'value': None,
                     'benchmark': None,
-                    'rule': 'Positive & Growing',
-                    'logic': "Great companies increase profits yearly.",
-                    'unit': '$'
+                    'rule': 'Lower is better',
+                    'logic': "Less reinvestment needed.",
+                    'unit': '%'
                 }
             
             return ratios
@@ -232,6 +323,7 @@ class FinancialAnalyzer:
             'Interest Margin': (lambda v: v <= 15, "Low debt" if v <= 15 else "High debt"),
             'Tax Rate': (lambda v: 15 <= v <= 25, "Normal" if 15 <= v <= 25 else "Abnormal"),
             'Net Margin': (lambda v: v >= 20, "Excellent" if v >= 20 else "Needs improvement"),
+            'Debt to Equity': (lambda v: v <= 0.80, "Healthy" if v <= 0.80 else "High"),
         }
         
         if ratio_name in ratio_rules:
@@ -255,6 +347,7 @@ class FinancialAnalyzer:
             'market_cap': self.info.get('marketCap', 'N/A'),
             'pe_ratio': self.info.get('trailingPE', 'N/A'),
             'dividend_yield': self.info.get('dividendYield', 'N/A'),
+            'current_price': self.info.get('currentPrice', 'N/A'),
         }
 
 
@@ -309,5 +402,12 @@ def get_buffett_ratio_info() -> Dict:
             'rule': '>= 20%',
             'logic': 'Net margin is the ultimate measure. Buffett seeks companies that convert 20%+ of revenue to profit.',
             'interpretation': 'Higher is better. Great profitability.'
+        },
+        'Debt to Equity': {
+            'description': 'Total Liabilities / Stockholders Equity',
+            'benchmark': 0.80,
+            'rule': '< 0.80',
+            'logic': 'Lower debt burden means less financial risk and stronger financial position.',
+            'interpretation': 'Lower is better. Healthy balance sheet.'
         },
     }
