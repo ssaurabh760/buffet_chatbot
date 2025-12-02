@@ -72,6 +72,7 @@ def load_model():
             # ✅ Key: Pass custom_objects even for .keras files
             model = tf.keras.models.load_model(
                 keras_path,
+                compile=False,
                 custom_objects={
                     'PositionalEncoding': PositionalEncoding,
                     'MultiHeadAttentionLayer': MultiHeadAttentionLayer,
