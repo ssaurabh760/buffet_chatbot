@@ -67,9 +67,9 @@ def load_model():
     """Load the trained transformer model."""
     try:
         # Try SavedModel format first (recommended)
-        if os.path.exists('./models/buffett_model'):
+        if os.path.exists('./models/buffett_model.keras'):
             st.info("Loading SavedModel format...")
-            model = tf.keras.models.load_model('./models/buffett_model')
+            model = tf.keras.models.load_model('./models/buffett_model.keras')
             return model
         
         # Fallback to H5 format with custom objects
