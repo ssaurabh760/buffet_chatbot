@@ -66,38 +66,29 @@ st.markdown(
 def load_model():
     """Load the trained transformer model."""
     try:
-        # Try SavedModel format first (recommended)
-        if os.path.exists('./models/buffett_model.keras'):
-            st.info("Loading SavedModel format...")
-            st.info("False")
-            model = tf.keras.models.load_model('./models/buffett_model.keras')
-            if model:
-                st.info("True")
-            st.info("False")
-            return model
+        keras_path = './models/buffett_model.keras'
         
-        # Fallback to H5 format with custom objects
-        elif os.path.exists('./models/model.h5'):
-            st.warning("Loading H5 format (legacy)...")
-            model = tf.keras.models.load_model('./models/model.h5', custom_objects={
-                "PositionalEncoding": PositionalEncoding,
-                "MultiHeadAttentionLayer": MultiHeadAttentionLayer,
-                "create_padding_mask": create_padding_mask,
-                "create_look_ahead_mask": create_look_ahead_mask,
-                "scaled_dot_product_attention": scaled_dot_product_attention,
-                "add_pos_enc": add_pos_enc,  
-            })
+        if os.path.exists(keras_path):
+            # ✅ Key: Pass custom_objects even for .keras files
+            model = tf.keras.models.load_model(
+                keras_path,
+                custom_objects={
+                    'PositionalEncoding': PositionalEncoding,
+                    'MultiHeadAttentionLayer': MultiHeadAttentionLayer,
+                    'create_padding_mask': create_padding_mask,
+                    'create_look_ahead_mask': create_look_ahead_mask,
+                    'scaled_dot_product_attention': scaled_dot_product_attention,
+                    'add_pos_enc': add_pos_enc,
+                }
+            )
             return model
         else:
-            st.error("❌ Model files not found!")
-            st.info("Place either './models/buffett_model' or './models/model.h5' in your project")
+            st.error("❌ Model file not found!")
             st.stop()
             
     except Exception as e:
         st.error(f"❌ Error loading model: {str(e)}")
-        st.info("Make sure the model and tokenizer files are in the './models/' directory")
         st.stop()
-
 # Initialize session state
 if "model" not in st.session_state:
     with st.spinner("🦉 Loading Warren Buffett AI..."):
