@@ -2,14 +2,23 @@ import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 import numpy as np
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from helper import PositionalEncoding, MultiHeadAttentionLayer, create_padding_mask, create_look_ahead_mask, predict
+from helper import (
+    PositionalEncoding, 
+    MultiHeadAttentionLayer,
+    create_padding_mask,
+    create_look_ahead_mask,
+    scaled_dot_product_attention,
+    predict
+)
 
-# Load your trained model
+# Load model with ALL custom objects
 model = load_model('./models/model.h5', custom_objects={
-        "PositionalEncoding": PositionalEncoding,
-        "MultiHeadAttentionLayer": MultiHeadAttentionLayer,
-    })
+    "PositionalEncoding": PositionalEncoding,
+    "MultiHeadAttentionLayer": MultiHeadAttentionLayer,
+    "create_padding_mask": create_padding_mask,
+    "create_look_ahead_mask": create_look_ahead_mask,
+    "scaled_dot_product_attention": scaled_dot_product_attention,
+})
 
 if "ti" not in st.session_state:
     st.session_state["ti"] = ""
@@ -22,17 +31,17 @@ def generate_response(text, model):
     return prediction
 
 # Streamlit UI
-st.title("Livermore Chatbot")
-st.write("Ask anything!")
+st.title("🌳 Livermore Chatbot")
+st.write("Ask anything about investing and trading!")
 
 st.markdown(
     """
     <style>
     .scrollable-box {
-        height: 300px;
+        height: 400px;
         overflow-y: auto;
         background-color: #f4f4f4;
-        padding: 10px;
+        padding: 15px;
         border: 1px solid #ddd;
         border-radius: 5px;
         font-family: monospace;
@@ -43,7 +52,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Display the conversation history in a scrollable box
 st.markdown(
     f"<div class='scrollable-box'>{st.session_state['conversation_history']}</div>",
     unsafe_allow_html=True,
@@ -51,12 +59,12 @@ st.markdown(
 
 def submit():
     user_input = st.session_state["ti"]
-    print(user_input)
     if user_input:
         response = generate_response(user_input, model)
-        st.session_state["conversation_history"] += f"User: {user_input}<br><br>Bot: {response}<br><br>"
+        st.session_state["conversation_history"] += f"<b>You:</b> {user_input}<br><br><b>Livermore:</b> {response}<br><br>"
         st.session_state["ti"] = ""
-    else:
-        st.write("Please type a message.")
 
 st.text_input("You: ", key="ti", on_change=submit)
+
+st.markdown("---")
+st.markdown("**Livermore Chatbot** - Powered by TensorFlow Transformer")
