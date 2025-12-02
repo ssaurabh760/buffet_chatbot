@@ -6,67 +6,117 @@ Calculates key financial ratios for stock analysis
 import yfinance as yf
 import pandas as pd
 import streamlit as st
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional
+import requests
 
 class FinancialAnalyzer:
     """Analyze stocks using Warren Buffett's financial ratio criteria."""
     
     def __init__(self, ticker: str):
         self.ticker = ticker.upper()
-        self.stock = yf.Ticker(self.ticker)
-        self.info = self.stock.info
+        
+        # Set proper user-agent to avoid chrome impersonation error
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        
+        try:
+            self.stock = yf.Ticker(self.ticker, session=self.session)
+            self.info = self.stock.info
+        except Exception as e:
+            st.error(f"Could not fetch data for {ticker}: {str(e)}")
+            self.stock = None
+            self.info = {}
         
     def get_income_statement(self) -> pd.DataFrame:
         """Get most recent income statement."""
         try:
+            if self.stock is None:
+                return pd.DataFrame()
+            
             income_stmt = self.stock.quarterly_financials
             if income_stmt.empty:
+                income_stmt = self.stock.financials  # Try annual if quarterly not available
+            
+            if income_stmt.empty:
                 return pd.DataFrame()
-            return income_stmt.iloc[:, 0]  # Most recent quarter
-        except:
+            
+            return income_stmt.iloc[:, 0]  # Most recent period
+        except Exception as e:
+            st.warning(f"Could not fetch income statement: {str(e)}")
             return pd.DataFrame()
     
     def get_balance_sheet(self) -> pd.DataFrame:
         """Get most recent balance sheet."""
         try:
+            if self.stock is None:
+                return pd.DataFrame()
+            
             balance = self.stock.quarterly_balance_sheet
             if balance.empty:
+                balance = self.stock.balance_sheet  # Try annual if quarterly not available
+            
+            if balance.empty:
                 return pd.DataFrame()
-            return balance.iloc[:, 0]  # Most recent quarter
-        except:
+            
+            return balance.iloc[:, 0]  # Most recent period
+        except Exception as e:
+            st.warning(f"Could not fetch balance sheet: {str(e)}")
             return pd.DataFrame()
     
     def get_cash_flow(self) -> pd.DataFrame:
         """Get most recent cash flow statement."""
         try:
+            if self.stock is None:
+                return pd.DataFrame()
+            
             cash_flow = self.stock.quarterly_cashflow
             if cash_flow.empty:
+                cash_flow = self.stock.cashflow  # Try annual if quarterly not available
+            
+            if cash_flow.empty:
                 return pd.DataFrame()
-            return cash_flow.iloc[:, 0]  # Most recent quarter
-        except:
+            
+            return cash_flow.iloc[:, 0]  # Most recent period
+        except Exception as e:
+            st.warning(f"Could not fetch cash flow: {str(e)}")
             return pd.DataFrame()
     
     def calculate_ratios(self) -> Dict:
         """Calculate all 8 Warren Buffett financial ratios."""
         ratios = {}
         
+        if self.stock is None:
+            st.error("Could not fetch stock data")
+            return {}
+        
         try:
             income = self.get_income_statement()
             
-            # Get necessary values
-            revenue = income.get('Total Revenue', 0)
+            if income.empty:
+                st.error("No income statement data available for this ticker")
+                return {}
+            
+            # Get necessary values with multiple possible field names
+            revenue = income.get('Total Revenue', income.get('Operating Revenue', 0))
             gross_profit = income.get('Gross Profit', 0)
-            sga_expense = income.get('Operating Expense', 0)
-            rd_expense = income.get('Research Development', 0)
-            depreciation = income.get('Depreciation', 0)
+            
+            # Operating expense might be under different names
+            sga_expense = income.get('Operating Expense', income.get('Selling General And Administration', 0))
+            rd_expense = income.get('Research Development', income.get('Research And Development', 0))
+            depreciation = income.get('Depreciation', income.get('Depreciation And Amortization', 0))
+            
             operating_income = income.get('Operating Income', 0)
             interest_expense = income.get('Interest Expense', 0)
-            taxes = income.get('Tax Provision', 0)
+            taxes = income.get('Tax Provision', income.get('Income Tax Expense', 0))
             net_income = income.get('Net Income', 0)
             
             # Safe division helper
             def safe_div(num, denom, default=None):
-                if denom == 0 or denom is None:
+                if denom == 0 or denom is None or num is None:
+                    return default
+                if num < 0 or denom < 0:  # Skip negative values
                     return default
                 return (num / denom) * 100
             
@@ -107,8 +157,8 @@ class FinancialAnalyzer:
             }
             
             # 5. Interest Expense Margin
-            if operating_income > 0:
-                int_margin = (interest_expense / operating_income) * 100
+            if operating_income and operating_income > 0:
+                int_margin = (interest_expense / operating_income) * 100 if interest_expense else 0
             else:
                 int_margin = None
                 
@@ -121,10 +171,10 @@ class FinancialAnalyzer:
             }
             
             # 6. Tax Rate
-            if revenue > 0:
+            if revenue and revenue > 0:
                 try:
-                    pre_tax_income = operating_income - interest_expense
-                    if pre_tax_income > 0:
+                    pre_tax_income = (operating_income or 0) - (interest_expense or 0)
+                    if pre_tax_income and pre_tax_income > 0 and taxes:
                         tax_rate = (taxes / pre_tax_income) * 100
                     else:
                         tax_rate = None
@@ -192,10 +242,13 @@ class FinancialAnalyzer:
         
         if ratio_name in ratio_rules:
             check, label = ratio_rules[ratio_name]
-            if check(value):
-                return f"✅ {label}"
-            else:
-                return f"⚠️ {label}"
+            try:
+                if check(value):
+                    return f"✅ {label}"
+                else:
+                    return f"⚠️ {label}"
+            except:
+                return "❓ Error"
         
         return "❓ Unknown"
     
