@@ -1,6 +1,6 @@
 """
-AppleBee - Warren Buffett Investment Advisor
-Complete Financial Analysis Dashboard + AI Chatbot
+Warren Buffett Investment Advisor Chatbot + Financial Dashboard
+Complete AppleBee Application
 """
 
 import streamlit as st
@@ -18,11 +18,7 @@ from helper import (
 from financial_analyzer import FinancialAnalyzer, get_buffett_ratio_info
 import os
 import pandas as pd
-import numpy as np
-from datetime import datetime
-import warnings
-
-warnings.filterwarnings('ignore')
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -36,18 +32,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .metric-pass { color: #28a745; font-weight: bold; }
-    .metric-fail { color: #dc3545; font-weight: bold; }
-    .metric-neutral { color: #ffc107; font-weight: bold; }
-    .section-header { 
-        font-size: 20px; 
-        font-weight: bold; 
-        color: #1f77b4;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        border-bottom: 2px solid #1f77b4;
-        padding-bottom: 10px;
-    }
     .chat-user {
         background-color: #e3f2fd;
         padding: 10px;
@@ -62,33 +46,28 @@ st.markdown(
         margin: 5px 0;
         border-left: 4px solid #9c27b0;
     }
+    .ratio-good {
+        background-color: #c8e6c9;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #4caf50;
+    }
+    .ratio-warning {
+        background-color: #fff9c4;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #fbc02d;
+    }
+    .ratio-bad {
+        background-color: #ffcdd2;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #f44336;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-# Sidebar
-st.sidebar.title("📊 AppleBee Dashboard")
-st.sidebar.markdown("---")
-stock_symbol = st.sidebar.text_input("Enter Stock Symbol (e.g., AAPL, MSFT, BRK.B)", value="AAPL").upper()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-### 📚 Warren Buffett's Investment Criteria
-
-**Income Statement:**
-- Gross Margin ≥ 40%
-- SG&A Expense ≤ 30%
-- R&D Expense ≤ 30%
-- Depreciation ≤ 10%
-- Interest Expense ≤ 15%
-- Net Profit Margin ≥ 20%
-- EPS Growth > 1.0
-
-**Balance Sheet:**
-- Cash > Debt
-- Debt-to-Equity < 0.80
-""")
 
 # Load model with caching
 @st.cache_resource
@@ -128,217 +107,24 @@ if "model" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-# Helper functions
-def get_pass_fail_symbol(value, threshold, compare_type="greater"):
-    """Returns ✓ or ✗ symbol"""
-    if value is None or pd.isna(value):
-        return "⚠"
-    
-    if compare_type == "greater":
-        return "✓" if value >= threshold else "✗"
-    elif compare_type == "less":
-        return "✓" if value <= threshold else "✗"
-    return "⚠"
+if "current_ticker" not in st.session_state:
+    st.session_state.current_ticker = None
 
-def display_income_statement_metrics(metrics):
-    """Display Income Statement Analysis"""
-    st.markdown('<div class="section-header">📋 Income Statement Analysis</div>', unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        value = metrics.get('Gross Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 40, "greater")
-        st.metric("Gross Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≥40%")
-    
-    with col2:
-        value = metrics.get('SGA Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 30, "less")
-        st.metric("SG&A Expense Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≤30%")
-    
-    with col3:
-        value = metrics.get('R&D Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 30, "less")
-        st.metric("R&D Expense Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≤30%")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        value = metrics.get('Depreciation Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 10, "less")
-        st.metric("Depreciation Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≤10%")
-    
-    with col2:
-        value = metrics.get('Interest Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 15, "less")
-        st.metric("Interest Expense Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≤15%")
-    
-    with col3:
-        value = metrics.get('Tax Rate', {}).get('value')
-        st.metric("Tax Rate", f"{value:.2f}%" if value else "N/A", "ℹ Corporate tax baseline")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        value = metrics.get('Net Margin', {}).get('value')
-        status = get_pass_fail_symbol(value, 20, "greater")
-        st.metric("Net Profit Margin", f"{value:.2f}%" if value else "N/A", f"{status} Target: ≥20%")
-    
-    with col2:
-        value = metrics.get('EPS Growth', {}).get('value')
-        status = get_pass_fail_symbol(value, 1.0, "greater")
-        st.metric("EPS Growth (YoY)", f"{value:.4f}" if value else "N/A", f"{status} Target: >1.0")
+if "current_ratios" not in st.session_state:
+    st.session_state.current_ratios = None
 
-def display_balance_sheet_metrics(metrics):
-    """Display Balance Sheet Analysis"""
-    st.markdown('<div class="section-header">🏦 Balance Sheet Analysis</div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        de_ratio = metrics.get('Debt to Equity', {}).get('value')
-        status = get_pass_fail_symbol(de_ratio, 0.80, "less")
-        st.metric("Debt-to-Equity Ratio", f"{de_ratio:.2f}" if de_ratio else "N/A", f"{status} Target: <0.80")
-    
-    with col2:
-        cash_vs_debt = metrics.get('Cash vs Debt', {})
-        if cash_vs_debt.get('value') is not None:
-            status = "✓" if cash_vs_debt.get('value') else "✗"
-            st.metric("Cash vs Total Debt", f"{status}", 
-                     f"Cash: ${cash_vs_debt.get('cash', 0)/1e9:.2f}B | Debt: ${cash_vs_debt.get('debt', 0)/1e9:.2f}B")
-        else:
-            st.metric("Cash vs Total Debt", "N/A", "Insufficient data")
+# Header
+st.markdown("# 🦉 Warren Buffett Investment Advisor")
+st.markdown("*Powered by AI + Financial Analysis*")
 
-def display_cashflow_metrics(metrics):
-    """Display Cash Flow Analysis"""
-    st.markdown('<div class="section-header">💰 Cash Flow Analysis</div>', unsafe_allow_html=True)
-    
-    capex = metrics.get('CapEx Margin', {}).get('value')
-    st.metric("CapEx Margin", f"{capex:.2f}%" if capex else "N/A", 
-             "ℹ Lower is better (less reinvestment needed)")
+# Navigation
+tab1, tab2 = st.tabs(["💬 Investment Chatbot", "📊 Financial Dashboard"])
 
-def display_summary_scorecard(metrics):
-    """Display Overall Investment Scorecard"""
-    st.markdown('<div class="section-header">🎯 Warren Buffett Scorecard</div>', unsafe_allow_html=True)
-    
-    criteria = {
-        "Gross Margin ≥ 40%": (metrics.get('Gross Margin', {}).get('value'), 40, "greater"),
-        "SG&A Expense ≤ 30%": (metrics.get('SGA Margin', {}).get('value'), 30, "less"),
-        "R&D Expense ≤ 30%": (metrics.get('R&D Margin', {}).get('value'), 30, "less"),
-        "Depreciation ≤ 10%": (metrics.get('Depreciation Margin', {}).get('value'), 10, "less"),
-        "Interest Expense ≤ 15%": (metrics.get('Interest Margin', {}).get('value'), 15, "less"),
-        "Net Profit Margin ≥ 20%": (metrics.get('Net Margin', {}).get('value'), 20, "greater"),
-        "EPS Growing (> 1.0)": (metrics.get('EPS Growth', {}).get('value'), 1.0, "greater"),
-        "Debt-to-Equity < 0.80": (metrics.get('Debt to Equity', {}).get('value'), 0.80, "less"),
-    }
-    
-    scorecard_data = []
-    passed = 0
-    total = 0
-    
-    for criterion, (value, threshold, comp_type) in criteria.items():
-        if value is not None:
-            total += 1
-            if comp_type == "greater":
-                passes = value >= threshold
-            else:
-                passes = value <= threshold
-            
-            if passes:
-                passed += 1
-            
-            status = "✓ PASS" if passes else "✗ FAIL"
-            
-            scorecard_data.append({
-                "Criterion": criterion,
-                "Value": f"{value:.2f}" if abs(value) < 10 else f"{value:.4f}",
-                "Target": f"{threshold:.0f}" if abs(threshold) < 10 else f"{threshold:.2f}",
-                "Status": status
-            })
-    
-    scorecard_df = pd.DataFrame(scorecard_data)
-    st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
-    
-    if total > 0:
-        st.markdown(f"**Score: {passed}/{total} criteria met ({int(passed/total*100)}%)**")
-
-# MAIN HEADER
-st.title("🦉 Warren Buffett Investment Advisor")
-st.markdown("*Complete financial analysis + AI investment education*")
-st.markdown("---")
-
-# Create tabs
-tab_dashboard, tab_chatbot = st.tabs(["📊 Financial Dashboard", "💬 Investment Chatbot"])
-
-# ===== DASHBOARD TAB =====
-with tab_dashboard:
-    if stock_symbol:
-        with st.spinner(f"🔍 Fetching data for {stock_symbol}..."):
-            analyzer = FinancialAnalyzer(stock_symbol)
-            metrics = analyzer.calculate_ratios()
-        
-        if metrics and len(metrics) > 0:
-            # Company info
-            info = analyzer.get_company_info()
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Company", info.get('name', 'N/A'))
-            with col2:
-                st.metric("Sector", info.get('sector', 'N/A'))
-            with col3:
-                st.metric("P/E Ratio", f"{info.get('pe_ratio', 'N/A'):.2f}" if isinstance(info.get('pe_ratio'), (int, float)) else "N/A")
-            with col4:
-                st.metric("Current Price", f"${info.get('current_price', 'N/A'):.2f}" if isinstance(info.get('current_price'), (int, float)) else "N/A")
-            
-            st.markdown("---")
-            
-            # Display analyses
-            display_income_statement_metrics(metrics)
-            st.markdown("")
-            display_balance_sheet_metrics(metrics)
-            st.markdown("")
-            display_cashflow_metrics(metrics)
-            st.markdown("")
-            display_summary_scorecard(metrics)
-            
-            # Financial statements
-            st.markdown("---")
-            st.markdown('<div class="section-header">📄 Financial Statements</div>', unsafe_allow_html=True)
-            
-            tabs_fs = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
-            
-            with tabs_fs[0]:
-                income = analyzer.get_income_statement()
-                if not income.empty:
-                    st.dataframe(income.iloc[:, :5], use_container_width=True)
-                else:
-                    st.info("Income statement data not available")
-            
-            with tabs_fs[1]:
-                balance = analyzer.get_balance_sheet()
-                if not balance.empty:
-                    st.dataframe(balance.iloc[:, :5], use_container_width=True)
-                else:
-                    st.info("Balance sheet data not available")
-            
-            with tabs_fs[2]:
-                cashflow = analyzer.get_cash_flow()
-                if not cashflow.empty:
-                    st.dataframe(cashflow.iloc[:, :5], use_container_width=True)
-                else:
-                    st.info("Cash flow statement data not available")
-            
-            st.session_state.current_metrics = metrics
-            st.session_state.current_symbol = stock_symbol
-        else:
-            st.error("Unable to fetch financial data for this ticker. Please try a different stock.")
-    else:
-        st.info("👈 Enter a stock symbol in the sidebar to analyze")
-
-# ===== CHATBOT TAB =====
-with tab_chatbot:
+# ============================================================================
+# TAB 1: CHATBOT
+# ============================================================================
+with tab1:
     st.markdown("### 💬 Ask Warren Buffett About Investing")
-    st.markdown("*Ask questions about financial metrics, investment philosophy, and value investing*")
     
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -400,6 +186,134 @@ with tab_chatbot:
             except Exception as e:
                 st.error(f"Error: {str(e)}")
 
+# ============================================================================
+# TAB 2: FINANCIAL DASHBOARD
+# ============================================================================
+with tab2:
+    st.markdown("### 📊 Financial Analysis Dashboard")
+    st.markdown("*Analyze stocks using Warren Buffett's financial criteria*")
+    
+    # Stock input
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        ticker = st.text_input(
+            "Enter stock ticker:",
+            placeholder="e.g., AAPL, MSFT, BRK.B",
+            label_visibility="collapsed"
+        ).upper()
+    with col2:
+        analyze_button = st.button("🔍 Analyze", use_container_width=True)
+    
+    if analyze_button and ticker:
+        with st.spinner(f"📊 Analyzing {ticker}..."):
+            try:
+                analyzer = FinancialAnalyzer(ticker)
+                st.session_state.current_ticker = ticker
+                st.session_state.current_ratios = analyzer.calculate_ratios()
+                
+                # Company info
+                info = analyzer.get_company_info()
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Company", info['name'])
+                with col2:
+                    st.metric("Sector", info['sector'])
+                with col3:
+                    st.metric("P/E Ratio", info['pe_ratio'])
+                with col4:
+                    st.metric("Dividend Yield", info['dividend_yield'])
+                
+                # Financial Ratios
+                st.markdown("---")
+                st.markdown("## Warren Buffett Financial Ratios")
+                
+                if st.session_state.current_ratios:
+                    ratio_info = get_buffett_ratio_info()
+                    
+                    for ratio_name, ratio_data in st.session_state.current_ratios.items():
+                        if ratio_name == 'Current EPS':
+                            continue
+                        
+                        value = ratio_data['value']
+                        benchmark = ratio_data['benchmark']
+                        rule = ratio_data['rule']
+                        logic = ratio_data['logic']
+                        unit = ratio_data['unit']
+                        
+                        # Assessment
+                        if value is None:
+                            assessment = "⚪ Data unavailable"
+                            css_class = "ratio-warning"
+                        else:
+                            assessment = analyzer.get_ratio_assessment(ratio_name, value)
+                            if "✅" in assessment:
+                                css_class = "ratio-good"
+                            elif "⚠️" in assessment:
+                                css_class = "ratio-warning"
+                            else:
+                                css_class = "ratio-bad"
+                        
+                        # Display
+                        with st.expander(f"📈 {ratio_name} {assessment}", expanded=False):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write(f"**Current Value:** {value:.2f}{unit}" if value else "N/A")
+                                st.write(f"**Benchmark:** {benchmark}{unit if benchmark else ''}")
+                                st.write(f"**Rule:** {rule}")
+                            
+                            with col2:
+                                st.write(f"**Buffett's Logic:**")
+                                st.write(logic)
+                            
+                            st.info(f"**Interpretation:** {ratio_info.get(ratio_name, {}).get('interpretation', 'N/A')}")
+                
+                # Financial Statements
+                st.markdown("---")
+                st.markdown("## Financial Statements")
+                
+                tabs_fs = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+                
+                with tabs_fs[0]:
+                    income = analyzer.get_income_statement()
+                    if not income.empty:
+                        st.dataframe(income)
+                    else:
+                        st.warning("Income statement data not available")
+                
+                with tabs_fs[1]:
+                    balance = analyzer.get_balance_sheet()
+                    if not balance.empty:
+                        st.dataframe(balance)
+                    else:
+                        st.warning("Balance sheet data not available")
+                
+                with tabs_fs[2]:
+                    cashflow = analyzer.get_cash_flow()
+                    if not cashflow.empty:
+                        st.dataframe(cashflow)
+                    else:
+                        st.warning("Cash flow statement data not available")
+                
+            except Exception as e:
+                st.error(f"❌ Error analyzing {ticker}: {str(e)}")
+                st.info("Make sure the ticker symbol is valid (e.g., AAPL, MSFT, BRK.B)")
+    
+    # Info sidebar
+    with st.sidebar:
+        st.markdown("### 📚 About Buffett Ratios")
+        st.markdown("""
+        These 7 key financial ratios help identify companies with:
+        - **Pricing Power** (high gross margins)
+        - **Efficient Operations** (low overhead)
+        - **Asset-Light Models** (low depreciation)
+        - **Financial Strength** (low debt)
+        - **Profitability** (high net margins)
+        
+        **Buffett's Philosophy:**
+        Look for companies that don't need to compete on price and generate strong, growing profits year after year.
+        """)
+
 # Footer
 st.markdown("---")
 col1, col2, col3 = st.columns(3)
@@ -409,9 +323,3 @@ with col2:
     st.markdown("**Data:** yfinance")
 with col3:
     st.markdown("**Status:** ✅ Online")
-
-st.markdown("""
----
-**Disclaimer:** This app is for educational purposes only. Not financial advice. 
-Always conduct your own research or consult with a financial advisor before investing.
-""")
