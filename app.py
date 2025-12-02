@@ -69,9 +69,11 @@ def load_model():
         # Try SavedModel format first (recommended)
         if os.path.exists('./models/buffett_model.keras'):
             st.info("Loading SavedModel format...")
+            st.info("False")
             model = tf.keras.models.load_model('./models/buffett_model.keras')
             if model:
                 st.info("True")
+            st.info("False")
             return model
         
         # Fallback to H5 format with custom objects
