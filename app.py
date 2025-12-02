@@ -1,8 +1,6 @@
 """
-Warren Buffett Investment Advisor Chatbot
-Powered by TensorFlow Transformer
-
-Streamlit Application for serving the chatbot
+Warren Buffett Investment Advisor Chatbot + Financial Dashboard
+Complete AppleBee Application
 """
 
 import streamlit as st
@@ -17,7 +15,10 @@ from helper import (
     predict,
     get_tokenizer
 )
+from financial_analyzer import FinancialAnalyzer, get_buffett_ratio_info
 import os
+import pandas as pd
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -31,17 +32,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .scrollable-box {
-        height: 500px;
-        overflow-y: auto;
-        background-color: #f0f2f6;
-        padding: 15px;
-        border: 2px solid #ddd;
-        border-radius: 8px;
-        font-family: 'Courier New', monospace;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-    }
     .chat-user {
         background-color: #e3f2fd;
         padding: 10px;
@@ -56,6 +46,24 @@ st.markdown(
         margin: 5px 0;
         border-left: 4px solid #9c27b0;
     }
+    .ratio-good {
+        background-color: #c8e6c9;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #4caf50;
+    }
+    .ratio-warning {
+        background-color: #fff9c4;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #fbc02d;
+    }
+    .ratio-bad {
+        background-color: #ffcdd2;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #f44336;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -69,7 +77,6 @@ def load_model():
         keras_path = './models/buffett_model.keras'
         
         if os.path.exists(keras_path):
-            # ✅ Key: Pass custom_objects even for .keras files
             model = tf.keras.models.load_model(
                 keras_path,
                 compile=False,
@@ -90,6 +97,7 @@ def load_model():
     except Exception as e:
         st.error(f"❌ Error loading model: {str(e)}")
         st.stop()
+
 # Initialize session state
 if "model" not in st.session_state:
     with st.spinner("🦉 Loading Warren Buffett AI..."):
@@ -99,132 +107,212 @@ if "model" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-if "user_input" not in st.session_state:
-    st.session_state.user_input = ""
+if "current_ticker" not in st.session_state:
+    st.session_state.current_ticker = None
+
+if "current_ratios" not in st.session_state:
+    st.session_state.current_ratios = None
 
 # Header
-col1, col2 = st.columns([1, 4])
-with col1:
-    st.markdown("## 🦉")
-with col2:
-    st.markdown("""
-    # Warren Buffett Investment Advisor
-    *Powered by Transformer AI trained on investment wisdom*
-    """)
+st.markdown("# 🦉 Warren Buffett Investment Advisor")
+st.markdown("*Powered by AI + Financial Analysis*")
 
-# Sidebar information
-with st.sidebar:
-    st.markdown("### 📊 About This Chatbot")
-    st.markdown("""
-    This is an AI chatbot trained on Warren Buffett's investment philosophy:
+# Navigation
+tab1, tab2 = st.tabs(["💬 Investment Chatbot", "📊 Financial Dashboard"])
+
+# ============================================================================
+# TAB 1: CHATBOT
+# ============================================================================
+with tab1:
+    st.markdown("### 💬 Ask Warren Buffett About Investing")
     
-    **Features:**
-    - ✅ Value investing principles
-    - ✅ Stock analysis techniques
-    - ✅ Business evaluation
-    - ✅ Risk management
-    - ✅ Asset allocation strategies
-    
-    **Model:**
-    - Transformer architecture (TensorFlow)
-    - Trained on 600 Q&A pairs
-    - 256-dimensional embeddings
-    
-    **Limitations:**
-    - Responses based on training data
-    - Not real-time market data
-    - Educational purposes only
-    """)
-    
-    st.markdown("---")
-    st.markdown("### 💡 Tips for Better Responses")
-    st.markdown("""
-    1. Ask specific investment questions
-    2. Use clear, complete sentences
-    3. Ask about business analysis concepts
-    4. Get explanations of investment philosophy
-    """)
-    
-    st.markdown("---")
-    if st.button("🔄 Clear History"):
-        st.session_state.conversation_history = []
-        st.success("Conversation cleared!")
-        st.rerun()
-
-# Main content area
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.markdown("### 💬 Conversation")
-with col2:
-    if st.button("📋 Copy All"):
-        st.info("Copy the conversation below")
-
-# Display conversation history
-if st.session_state.conversation_history:
-    conversation_text = ""
-    for msg in st.session_state.conversation_history:
-        if msg["role"] == "user":
-            conversation_text += f'<div class="chat-user"><b>You:</b> {msg["content"]}</div>'
-        else:
-            conversation_text += f'<div class="chat-assistant"><b>Warren Buffett:</b> {msg["content"]}</div>'
-    
-    st.markdown(conversation_text, unsafe_allow_html=True)
-else:
-    st.markdown(
-        '<div style="text-align: center; color: #666; padding: 40px;">'
-        '<p>💬 No conversation yet. Ask Warren Buffett something!</p>'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-# Input section
-st.markdown("---")
-st.markdown("### ✍️ Your Question")
-
-col1, col2 = st.columns([5, 1])
-
-with col1:
-    user_question = st.text_input(
-        "Ask anything about investing:",
-        placeholder="e.g., What is your investing philosophy?",
-        key="user_question_input",
-        label_visibility="collapsed"
-    )
-
-with col2:
-    send_button = st.button("📤 Send", use_container_width=True)
-
-# Process user input
-if send_button and user_question.strip():
-    # Add user message to history
-    st.session_state.conversation_history.append({
-        "role": "user",
-        "content": user_question
-    })
-    
-    # Generate response
-    with st.spinner("🤔 Warren is thinking..."):
-        try:
-            response = predict(user_question, st.session_state.model)
-            
-            # Clean up response
-            if isinstance(response, bytes):
-                response = response.decode('utf-8')
-            response = str(response).strip()
-            
-            if not response or response.lower() == "unknown":
-                response = "I appreciate your question, but I don't have enough information to provide a detailed answer. Could you rephrase your question or ask about another investment topic?"
-            
-            st.session_state.conversation_history.append({
-                "role": "assistant",
-                "content": response
-            })
-            
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("**Chat History**")
+    with col2:
+        if st.button("🔄 Clear"):
+            st.session_state.conversation_history = []
             st.rerun()
-            
-        except Exception as e:
-            st.error(f"❌ Error generating response: {str(e)}")
-            st.info("Try asking a different question")
+    
+    # Display conversation
+    if st.session_state.conversation_history:
+        for msg in st.session_state.conversation_history:
+            if msg["role"] == "user":
+                st.markdown(
+                    f'<div class="chat-user"><b>You:</b> {msg["content"]}</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<div class="chat-assistant"><b>Warren Buffett:</b> {msg["content"]}</div>',
+                    unsafe_allow_html=True
+                )
+    else:
+        st.info("💬 No conversation yet. Ask Warren Buffett something!")
+    
+    # Input
+    st.markdown("---")
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        user_question = st.text_input(
+            "Your question:",
+            placeholder="e.g., What makes a good company to invest in?",
+            label_visibility="collapsed"
+        )
+    with col2:
+        send_button = st.button("📤 Send", use_container_width=True)
+    
+    # Process question
+    if send_button and user_question.strip():
+        st.session_state.conversation_history.append({
+            "role": "user",
+            "content": user_question
+        })
+        
+        with st.spinner("🤔 Warren is thinking..."):
+            try:
+                response = predict(user_question, st.session_state.model)
+                response = str(response).strip()
+                
+                if not response or response.lower() == "unknown":
+                    response = "I appreciate your question. Could you rephrase or ask about another investment topic?"
+                
+                st.session_state.conversation_history.append({
+                    "role": "assistant",
+                    "content": response
+                })
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+# ============================================================================
+# TAB 2: FINANCIAL DASHBOARD
+# ============================================================================
+with tab2:
+    st.markdown("### 📊 Financial Analysis Dashboard")
+    st.markdown("*Analyze stocks using Warren Buffett's financial criteria*")
+    
+    # Stock input
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        ticker = st.text_input(
+            "Enter stock ticker:",
+            placeholder="e.g., AAPL, MSFT, BRK.B",
+            label_visibility="collapsed"
+        ).upper()
+    with col2:
+        analyze_button = st.button("🔍 Analyze", use_container_width=True)
+    
+    if analyze_button and ticker:
+        with st.spinner(f"📊 Analyzing {ticker}..."):
+            try:
+                analyzer = FinancialAnalyzer(ticker)
+                st.session_state.current_ticker = ticker
+                st.session_state.current_ratios = analyzer.calculate_ratios()
+                
+                # Company info
+                info = analyzer.get_company_info()
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Company", info['name'])
+                with col2:
+                    st.metric("Sector", info['sector'])
+                with col3:
+                    st.metric("P/E Ratio", info['pe_ratio'])
+                with col4:
+                    st.metric("Dividend Yield", info['dividend_yield'])
+                
+                # Financial Ratios
+                st.markdown("---")
+                st.markdown("## Warren Buffett Financial Ratios")
+                
+                if st.session_state.current_ratios:
+                    ratio_info = get_buffett_ratio_info()
+                    
+                    for ratio_name, ratio_data in st.session_state.current_ratios.items():
+                        if ratio_name == 'Current EPS':
+                            continue
+                        
+                        value = ratio_data['value']
+                        benchmark = ratio_data['benchmark']
+                        rule = ratio_data['rule']
+                        logic = ratio_data['logic']
+                        unit = ratio_data['unit']
+                        
+                        # Assessment
+                        if value is None:
+                            assessment = "⚪ Data unavailable"
+                            css_class = "ratio-warning"
+                        else:
+                            assessment = analyzer.get_ratio_assessment(ratio_name, value)
+                            if "✅" in assessment:
+                                css_class = "ratio-good"
+                            elif "⚠️" in assessment:
+                                css_class = "ratio-warning"
+                            else:
+                                css_class = "ratio-bad"
+                        
+                        # Display
+                        with st.expander(f"📈 {ratio_name} {assessment}", expanded=False):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write(f"**Current Value:** {value:.2f}{unit}" if value else "N/A")
+                                st.write(f"**Benchmark:** {benchmark}{unit if benchmark else ''}")
+                                st.write(f"**Rule:** {rule}")
+                            
+                            with col2:
+                                st.write(f"**Buffett's Logic:**")
+                                st.write(logic)
+                            
+                            st.info(f"**Interpretation:** {ratio_info.get(ratio_name, {}).get('interpretation', 'N/A')}")
+                
+                # Financial Statements
+                st.markdown("---")
+                st.markdown("## Financial Statements")
+                
+                tabs_fs = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+                
+                with tabs_fs[0]:
+                    income = analyzer.get_income_statement()
+                    if not income.empty:
+                        st.dataframe(income)
+                    else:
+                        st.warning("Income statement data not available")
+                
+                with tabs_fs[1]:
+                    balance = analyzer.get_balance_sheet()
+                    if not balance.empty:
+                        st.dataframe(balance)
+                    else:
+                        st.warning("Balance sheet data not available")
+                
+                with tabs_fs[2]:
+                    cashflow = analyzer.get_cash_flow()
+                    if not cashflow.empty:
+                        st.dataframe(cashflow)
+                    else:
+                        st.warning("Cash flow statement data not available")
+                
+            except Exception as e:
+                st.error(f"❌ Error analyzing {ticker}: {str(e)}")
+                st.info("Make sure the ticker symbol is valid (e.g., AAPL, MSFT, BRK.B)")
+    
+    # Info sidebar
+    with st.sidebar:
+        st.markdown("### 📚 About Buffett Ratios")
+        st.markdown("""
+        These 7 key financial ratios help identify companies with:
+        - **Pricing Power** (high gross margins)
+        - **Efficient Operations** (low overhead)
+        - **Asset-Light Models** (low depreciation)
+        - **Financial Strength** (low debt)
+        - **Profitability** (high net margins)
+        
+        **Buffett's Philosophy:**
+        Look for companies that don't need to compete on price and generate strong, growing profits year after year.
+        """)
 
 # Footer
 st.markdown("---")
@@ -232,6 +320,6 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("**Model:** TensorFlow Transformer")
 with col2:
-    st.markdown("**Training Data:** 600 Q&A pairs")
+    st.markdown("**Data:** yfinance")
 with col3:
     st.markdown("**Status:** ✅ Online")
