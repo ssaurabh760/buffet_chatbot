@@ -21,6 +21,7 @@ def add_pos_enc(x):
         tf.cos(angles),
     )
     return x + angles[tf.newaxis, :, :]
+
 class PositionalEncoding(tf.keras.layers.Layer):
     def __init__(self, position, d_model, **kwargs):
         super(PositionalEncoding, self).__init__(**kwargs)
@@ -164,7 +165,17 @@ def create_look_ahead_mask(x):
     return tf.maximum(look_ahead_mask, padding_mask)
 
 MAX_LENGTH = 78
-tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('./models/tokenizer_vocab')
+# Lazy load tokenizer - only load when needed
+_tokenizer = None
+
+def get_tokenizer():
+    global _tokenizer
+    if _tokenizer is None:
+        _tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('./models/tokenizer_vocab')
+    return _tokenizer
+
+# Use this in functions that need tokenizer
+tokenizer = None  # Placeholder
 
 START_TOKEN, END_TOKEN = [tokenizer.vocab_size], [tokenizer.vocab_size + 1]
 
@@ -201,6 +212,7 @@ def preprocess_sentence(sentence):
     return sentence
 
 def evaluate(sentence, model):
+    tokenizer = get_tokenizer() 
     sentence = preprocess_sentence(sentence)
 
     sentence = tf.expand_dims(
@@ -228,6 +240,7 @@ def evaluate(sentence, model):
 
 
 def predict(sentence, model):
+    tokenizer = get_tokenizer()
     prediction = evaluate(sentence, model)
     predicted_sentence = tokenizer.decode(
         [i for i in prediction if i < tokenizer.vocab_size]
