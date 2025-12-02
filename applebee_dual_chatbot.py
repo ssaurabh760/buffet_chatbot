@@ -267,37 +267,37 @@ with tab3:
     model_path = "./models/model.h5"
     tokenizer_path = "./models/tokenizer_vocab"
     
-    # Check if model exists
-    model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path)
+    # # Check if model exists
+    # model_exists = os.path.exists(model_path) and os.path.exists(tokenizer_path)
     
-    if not model_exists:
-        st.warning("⚠️ Model files not found!")
+    # if not model_exists:
+    #     st.warning("⚠️ Model files not found!")
         
-        st.markdown("""
-        ### 📥 Setup Instructions
+    #     st.markdown("""
+    #     ### 📥 Setup Instructions
         
-        To use the local transformer chatbot:
+    #     To use the local transformer chatbot:
         
-        **Option A: Download Pre-trained Model**
-        1. Visit: https://github.com/bryanlimy/tf2-transformer-chatbot
-        2. Download `model.h5` and `tokenizer_vocab`
-        3. Create directory: `./models/`
-        4. Place files there:
-           - `./models/transformer_model.h5`
-           - `./models/tokenizer`
+    #     **Option A: Download Pre-trained Model**
+    #     1. Visit: https://github.com/bryanlimy/tf2-transformer-chatbot
+    #     2. Download `model.h5` and `tokenizer_vocab`
+    #     3. Create directory: `./models/`
+    #     4. Place files there:
+    #        - `./models/transformer_model.h5`
+    #        - `./models/tokenizer`
         
-        **Option B: Train Your Own Model**
-        1. Use professor's notebook: `tf2_tpu_transformer_chatbot.ipynb`
-        2. Run on Google Colab (free GPU/TPU)
-        3. Download trained model
-        4. Place in `./models/` directory
+    #     **Option B: Train Your Own Model**
+    #     1. Use professor's notebook: `tf2_tpu_transformer_chatbot.ipynb`
+    #     2. Run on Google Colab (free GPU/TPU)
+    #     3. Download trained model
+    #     4. Place in `./models/` directory
         
-        **Resources:**
-        - 📓 Professor's Notebook
-        - 📚 TensorFlow Documentation
-        - 🔗 GitHub Repository
-        """)
-        st.stop()
+    #     **Resources:**
+    #     - 📓 Professor's Notebook
+    #     - 📚 TensorFlow Documentation
+    #     - 🔗 GitHub Repository
+    #     """)
+    #     st.stop()
     
     # Initialize session state
     if "local_chat_history" not in st.session_state:
