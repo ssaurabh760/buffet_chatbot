@@ -9,6 +9,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
+import os
+import re
+import json
 
 # Try to import yfinance
 try:
@@ -16,6 +19,382 @@ try:
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
+
+# Try to import TensorFlow for chatbot
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+
+# ============================================================================
+# CHATBOT MODULE (Integrated for simplicity)
+# ============================================================================
+
+# Model directory - where trained model files should be placed
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
+
+def preprocess_sentence_chatbot(sentence):
+    """Clean and preprocess a sentence for chatbot"""
+    if not isinstance(sentence, str):
+        sentence = str(sentence)
+    
+    sentence = sentence.lower().strip()
+    sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
+    sentence = re.sub(r'[" "]+', " ", sentence)
+    sentence = re.sub(r"i'm", "i am", sentence)
+    sentence = re.sub(r"he's", "he is", sentence)
+    sentence = re.sub(r"she's", "she is", sentence)
+    sentence = re.sub(r"it's", "it is", sentence)
+    sentence = re.sub(r"that's", "that is", sentence)
+    sentence = re.sub(r"what's", "what is", sentence)
+    sentence = re.sub(r"where's", "where is", sentence)
+    sentence = re.sub(r"how's", "how is", sentence)
+    sentence = re.sub(r"\'ll", " will", sentence)
+    sentence = re.sub(r"\'ve", " have", sentence)
+    sentence = re.sub(r"\'re", " are", sentence)
+    sentence = re.sub(r"\'d", " would", sentence)
+    sentence = re.sub(r"won't", "will not", sentence)
+    sentence = re.sub(r"can't", "cannot", sentence)
+    sentence = re.sub(r"n't", " not", sentence)
+    sentence = re.sub(r"n'", "ng", sentence)
+    sentence = re.sub(r"'bout", "about", sentence)
+    sentence = re.sub(r"[^a-zA-Z0-9?.!,%]+", " ", sentence)
+    sentence = sentence.strip()
+    return sentence
+
+
+class SimpleTokenizer:
+    """A simple word-level tokenizer for the chatbot."""
+    
+    def __init__(self):
+        self.word2idx = {}
+        self.idx2word = {}
+        self.vocab_size = 0
+        self.oov_token = '<OOV>'
+        self.pad_token = '<PAD>'
+    
+    def encode(self, sentence):
+        return [self.word2idx.get(word, 1) for word in sentence.split()]
+    
+    def decode(self, tokens):
+        words = [self.idx2word.get(idx, self.oov_token) for idx in tokens 
+                 if idx != 0 and idx in self.idx2word]
+        return ' '.join(words)
+    
+    @classmethod
+    def load(cls, path):
+        with open(path, 'r') as f:
+            data = json.load(f)
+        tokenizer = cls()
+        tokenizer.word2idx = data['word2idx']
+        tokenizer.idx2word = {int(k): v for k, v in data['idx2word'].items()}
+        tokenizer.vocab_size = data['vocab_size']
+        return tokenizer
+
+
+# Custom layers for model loading (only define if TensorFlow is available)
+if TF_AVAILABLE:
+    import numpy as np_tf
+    
+    # Transformer components matching the training script
+    def get_angles(pos, i, d_model):
+        angle_rates = 1 / np.power(10000, (2 * (i // 2)) / np.float32(d_model))
+        return pos * angle_rates
+
+    def positional_encoding(position, d_model):
+        angle_rads = get_angles(np.arange(position)[:, np.newaxis], np.arange(d_model)[np.newaxis, :], d_model)
+        angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
+        angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+        pos_encoding = angle_rads[np.newaxis, ...]
+        return tf.cast(pos_encoding, dtype=tf.float32)
+
+    def create_padding_mask(seq):
+        seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
+        return seq[:, tf.newaxis, tf.newaxis, :]
+
+    def create_look_ahead_mask(size):
+        mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+        return mask
+
+    def scaled_dot_product_attention(q, k, v, mask):
+        matmul_qk = tf.matmul(q, k, transpose_b=True)
+        dk = tf.cast(tf.shape(k)[-1], tf.float32)
+        scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
+        if mask is not None:
+            scaled_attention_logits += (mask * -1e9)
+        attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)
+        output = tf.matmul(attention_weights, v)
+        return output, attention_weights
+
+    class MultiHeadAttention(tf.keras.layers.Layer):
+        def __init__(self, d_model, num_heads):
+            super(MultiHeadAttention, self).__init__()
+            self.num_heads = num_heads
+            self.d_model = d_model
+            self.depth = d_model // num_heads
+            self.wq = tf.keras.layers.Dense(d_model)
+            self.wk = tf.keras.layers.Dense(d_model)
+            self.wv = tf.keras.layers.Dense(d_model)
+            self.dense = tf.keras.layers.Dense(d_model)
+        
+        def split_heads(self, x, batch_size):
+            x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
+            return tf.transpose(x, perm=[0, 2, 1, 3])
+        
+        def call(self, v, k, q, mask):
+            batch_size = tf.shape(q)[0]
+            q = self.wq(q)
+            k = self.wk(k)
+            v = self.wv(v)
+            q = self.split_heads(q, batch_size)
+            k = self.split_heads(k, batch_size)
+            v = self.split_heads(v, batch_size)
+            scaled_attention, _ = scaled_dot_product_attention(q, k, v, mask)
+            scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
+            concat_attention = tf.reshape(scaled_attention, (batch_size, -1, self.d_model))
+            output = self.dense(concat_attention)
+            return output
+
+    def point_wise_feed_forward_network(d_model, dff):
+        return tf.keras.Sequential([
+            tf.keras.layers.Dense(dff, activation='relu'),
+            tf.keras.layers.Dense(d_model)
+        ])
+
+    class EncoderLayer(tf.keras.layers.Layer):
+        def __init__(self, d_model, num_heads, dff, rate=0.1):
+            super(EncoderLayer, self).__init__()
+            self.mha = MultiHeadAttention(d_model, num_heads)
+            self.ffn = point_wise_feed_forward_network(d_model, dff)
+            self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.dropout1 = tf.keras.layers.Dropout(rate)
+            self.dropout2 = tf.keras.layers.Dropout(rate)
+        
+        def call(self, x, training=False, mask=None):
+            attn_output = self.mha(x, x, x, mask)
+            attn_output = self.dropout1(attn_output, training=training)
+            out1 = self.layernorm1(x + attn_output)
+            ffn_output = self.ffn(out1)
+            ffn_output = self.dropout2(ffn_output, training=training)
+            out2 = self.layernorm2(out1 + ffn_output)
+            return out2
+
+    class DecoderLayer(tf.keras.layers.Layer):
+        def __init__(self, d_model, num_heads, dff, rate=0.1):
+            super(DecoderLayer, self).__init__()
+            self.mha1 = MultiHeadAttention(d_model, num_heads)
+            self.mha2 = MultiHeadAttention(d_model, num_heads)
+            self.ffn = point_wise_feed_forward_network(d_model, dff)
+            self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            self.dropout1 = tf.keras.layers.Dropout(rate)
+            self.dropout2 = tf.keras.layers.Dropout(rate)
+            self.dropout3 = tf.keras.layers.Dropout(rate)
+        
+        def call(self, x, enc_output, training=False, look_ahead_mask=None, padding_mask=None):
+            attn1 = self.mha1(x, x, x, look_ahead_mask)
+            attn1 = self.dropout1(attn1, training=training)
+            out1 = self.layernorm1(attn1 + x)
+            attn2 = self.mha2(enc_output, enc_output, out1, padding_mask)
+            attn2 = self.dropout2(attn2, training=training)
+            out2 = self.layernorm2(attn2 + out1)
+            ffn_output = self.ffn(out2)
+            ffn_output = self.dropout3(ffn_output, training=training)
+            out3 = self.layernorm3(ffn_output + out2)
+            return out3
+
+    class Encoder(tf.keras.layers.Layer):
+        def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, maximum_position_encoding, rate=0.1):
+            super(Encoder, self).__init__()
+            self.d_model = d_model
+            self.num_layers = num_layers
+            self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
+            self.pos_encoding = positional_encoding(maximum_position_encoding, d_model)
+            self.enc_layers = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)]
+            self.dropout = tf.keras.layers.Dropout(rate)
+        
+        def call(self, x, training=False, mask=None):
+            seq_len = tf.shape(x)[1]
+            x = self.embedding(x)
+            x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+            x += self.pos_encoding[:, :seq_len, :]
+            x = self.dropout(x, training=training)
+            for i in range(self.num_layers):
+                x = self.enc_layers[i](x, training=training, mask=mask)
+            return x
+
+    class Decoder(tf.keras.layers.Layer):
+        def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size, maximum_position_encoding, rate=0.1):
+            super(Decoder, self).__init__()
+            self.d_model = d_model
+            self.num_layers = num_layers
+            self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+            self.pos_encoding = positional_encoding(maximum_position_encoding, d_model)
+            self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate) for _ in range(num_layers)]
+            self.dropout = tf.keras.layers.Dropout(rate)
+        
+        def call(self, x, enc_output, training=False, look_ahead_mask=None, padding_mask=None):
+            seq_len = tf.shape(x)[1]
+            x = self.embedding(x)
+            x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+            x += self.pos_encoding[:, :seq_len, :]
+            x = self.dropout(x, training=training)
+            for i in range(self.num_layers):
+                x = self.dec_layers[i](x, enc_output, training=training, look_ahead_mask=look_ahead_mask, padding_mask=padding_mask)
+            return x
+
+    class Transformer(tf.keras.Model):
+        def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, target_vocab_size, pe_input, pe_target, rate=0.1):
+            super(Transformer, self).__init__()
+            self.encoder = Encoder(num_layers, d_model, num_heads, dff, input_vocab_size, pe_input, rate)
+            self.decoder = Decoder(num_layers, d_model, num_heads, dff, target_vocab_size, pe_target, rate)
+            self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+        
+        def call(self, inputs, training=False):
+            inp, tar = inputs
+            enc_padding_mask = create_padding_mask(inp)
+            dec_padding_mask = create_padding_mask(inp)
+            look_ahead_mask = create_look_ahead_mask(tf.shape(tar)[1])
+            dec_target_padding_mask = create_padding_mask(tar)
+            combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
+            
+            enc_output = self.encoder(inp, training=training, mask=enc_padding_mask)
+            dec_output = self.decoder(tar, enc_output, training=training, look_ahead_mask=combined_mask, padding_mask=dec_padding_mask)
+            final_output = self.final_layer(dec_output)
+            return final_output
+
+
+class BuffettChatbot:
+    """Warren Buffett Investment Advisor Chatbot"""
+    
+    def __init__(self, model_dir):
+        self.model_dir = model_dir
+        self.model = None
+        self.tokenizer = None
+        self.config = None
+        self.loaded = False
+        self._load_model()
+    
+    def _load_model(self):
+        """Load the trained model and tokenizer"""
+        if not TF_AVAILABLE:
+            return
+        
+        try:
+            config_path = os.path.join(self.model_dir, "config.json")
+            if not os.path.exists(config_path):
+                return
+            
+            with open(config_path, 'r') as f:
+                self.config = json.load(f)
+            
+            tokenizer_path = os.path.join(self.model_dir, "tokenizer.json")
+            if not os.path.exists(tokenizer_path):
+                return
+            
+            self.tokenizer = SimpleTokenizer.load(tokenizer_path)
+            
+            # Check for weights file
+            weights_path = os.path.join(self.model_dir, "transformer_weights.weights.h5")
+            if not os.path.exists(weights_path):
+                return
+            
+            # Rebuild model architecture from config
+            vocab_size = self.config["vocab_size"]
+            num_layers = self.config["num_layers"]
+            d_model = self.config["d_model"]
+            num_heads = self.config["num_heads"]
+            dff = self.config["units"]
+            dropout = self.config["dropout"]
+            max_length = self.config["max_length"]
+            
+            self.model = Transformer(
+                num_layers=num_layers,
+                d_model=d_model,
+                num_heads=num_heads,
+                dff=dff,
+                input_vocab_size=vocab_size,
+                target_vocab_size=vocab_size,
+                pe_input=vocab_size,
+                pe_target=vocab_size,
+                rate=dropout
+            )
+            
+            # Build model by calling it once
+            sample_input = (tf.zeros((1, max_length), dtype=tf.int32), tf.zeros((1, max_length-1), dtype=tf.int32))
+            _ = self.model(sample_input)
+            
+            # Load weights
+            self.model.load_weights(weights_path)
+            self.loaded = True
+            
+        except Exception as e:
+            print(f"Error loading chatbot: {e}")
+            self.loaded = False
+    
+    def is_loaded(self):
+        return self.loaded
+    
+    def _evaluate(self, sentence):
+        sentence = preprocess_sentence_chatbot(sentence)
+        START_TOKEN = self.config["start_token"]
+        END_TOKEN = self.config["end_token"]
+        MAX_LENGTH = self.config["max_length"]
+        
+        # Tokenize and pad input
+        sentence_tok = [START_TOKEN] + self.tokenizer.encode(sentence) + [END_TOKEN]
+        sentence_tok = tf.keras.preprocessing.sequence.pad_sequences([sentence_tok], maxlen=MAX_LENGTH, padding="post")
+        encoder_input = tf.cast(sentence_tok, tf.int32)
+        
+        # Start with START token
+        decoder_input = [START_TOKEN]
+        output = tf.expand_dims(decoder_input, 0)
+        output = tf.cast(output, tf.int32)
+        
+        for i in range(MAX_LENGTH):
+            predictions = self.model((encoder_input, output), training=False)
+            predictions = predictions[:, -1:, :]
+            predicted_id = tf.argmax(predictions, axis=-1, output_type=tf.int32)
+            predicted_id_val = int(predicted_id.numpy()[0][0])
+            
+            if predicted_id_val == END_TOKEN:
+                break
+            
+            output = tf.concat([output, predicted_id], axis=-1)
+        
+        return tf.squeeze(output, axis=0)
+    
+    def chat(self, message):
+        if not self.loaded:
+            return None
+        try:
+            prediction = self._evaluate(message)
+            response = self.tokenizer.decode(
+                [i for i in prediction.numpy() if i < self.tokenizer.vocab_size]
+            )
+            return response if response else "I'm not sure how to respond to that."
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+
+@st.cache_resource
+def load_chatbot():
+    """Load the chatbot model (cached)"""
+    return BuffettChatbot(MODEL_DIR)
+
+
+def is_model_available():
+    """Check if the trained model files exist"""
+    required_files = ["config.json", "tokenizer.json", "transformer_weights.weights.h5"]
+    
+    for f in required_files:
+        if not os.path.exists(os.path.join(MODEL_DIR, f)):
+            return False
+    
+    return True
 
 # Page configuration
 st.set_page_config(
@@ -1203,31 +1582,125 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        st.info("🚧 **Coming Soon!** The AI Chatbot feature is under development. This chatbot will be trained on Warren Buffett's investment principles and will help you understand financial ratios and stock analysis.")
+        # Check if model is available
+        model_available = is_model_available() and TF_AVAILABLE
         
-        # Placeholder chat interface
-        st.markdown("### Ask the Buffett Bot")
+        if model_available:
+            # Load the chatbot
+            chatbot = load_chatbot()
+            
+            if chatbot.is_loaded():
+                st.success("✅ **Chatbot Ready!** The Warren Buffett AI advisor is trained and ready to answer your questions.")
+                
+                # Model info
+                with st.expander("ℹ️ Model Information"):
+                    st.markdown(f"""
+                    - **Model Directory:** `{MODEL_DIR}`
+                    - **Vocabulary Size:** {chatbot.config.get('vocab_size', 'N/A')}
+                    - **Max Length:** {chatbot.config.get('max_length', 'N/A')}
+                    - **Layers:** {chatbot.config.get('num_layers', 'N/A')}
+                    - **Model Dimension:** {chatbot.config.get('d_model', 'N/A')}
+                    """)
+            else:
+                st.warning("⚠️ Model files found but failed to load. Check the console for errors.")
+                model_available = False
+        else:
+            if not TF_AVAILABLE:
+                st.warning("⚠️ **TensorFlow not installed.** Install TensorFlow to use the chatbot: `pip install tensorflow`")
+            else:
+                st.info("""
+                🚀 **Train Your Chatbot!**
+                
+                To enable the AI chatbot:
+                1. Open `train_chatbot_colab.py` in Google Colab
+                2. Upload your Q&A CSV file with Warren Buffett investment knowledge
+                3. Train the model (takes ~10-30 minutes with GPU)
+                4. Download the model ZIP file
+                5. Extract to the `model/` folder in this project
+                
+                Required files in `model/` folder:
+                - `buffett_chatbot_model.h5`
+                - `tokenizer.json`
+                - `config.json`
+                """)
+        
+        st.markdown("---")
+        
+        # Chat interface
+        st.markdown("### 💬 Chat with the Buffett Bot")
         
         # Initialize chat history
         if "messages" not in st.session_state:
             st.session_state.messages = []
         
+        # Clear chat button
+        col1, col2 = st.columns([6, 1])
+        with col2:
+            if st.button("🗑️ Clear", help="Clear chat history"):
+                st.session_state.messages = []
+                st.rerun()
+        
         # Display chat messages
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+        chat_container = st.container()
+        with chat_container:
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"], avatar="🧑‍💼" if message["role"] == "user" else "🎩"):
+                    st.markdown(message["content"])
+        
+        # Sample questions
+        if not st.session_state.messages:
+            st.markdown("**Try asking:**")
+            sample_questions = [
+                "What is gross margin?",
+                "How does Warren Buffett select stocks?",
+                "What is a good debt to equity ratio?",
+                "Why does Buffett avoid high R&D companies?",
+                "What makes a company a good investment?",
+            ]
+            
+            cols = st.columns(3)
+            for i, question in enumerate(sample_questions[:3]):
+                with cols[i]:
+                    if st.button(f"📝 {question[:30]}...", key=f"sample_{i}", help=question):
+                        st.session_state.pending_question = question
+                        st.rerun()
+        
+        # Handle pending question from sample buttons
+        if "pending_question" in st.session_state:
+            prompt = st.session_state.pending_question
+            del st.session_state.pending_question
+            
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            if model_available and chatbot.is_loaded():
+                response = chatbot.chat(prompt)
+                if response is None:
+                    response = "I'm having trouble generating a response. Please try again."
+            else:
+                response = "🚧 The chatbot model is not loaded. Please train the model first using the Colab notebook."
+            
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.rerun()
         
         # Chat input
         if prompt := st.chat_input("Ask about Warren Buffett's investment principles..."):
             # Add user message
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
+            with st.chat_message("user", avatar="🧑‍💼"):
                 st.markdown(prompt)
             
-            # Placeholder response
-            with st.chat_message("assistant"):
-                response = "🚧 The AI Chatbot is currently being developed. Soon, I'll be able to answer your questions about Warren Buffett's investment strategies, explain financial ratios, and provide insights based on the stock analysis dashboard!"
+            # Generate response
+            with st.chat_message("assistant", avatar="🎩"):
+                if model_available and chatbot.is_loaded():
+                    with st.spinner("Thinking..."):
+                        response = chatbot.chat(prompt)
+                        if response is None:
+                            response = "I'm having trouble generating a response. Please try again."
+                else:
+                    response = "🚧 The chatbot model is not loaded. Please train the model first using the Colab notebook (`train_chatbot_colab.py`)."
+                
                 st.markdown(response)
+            
             st.session_state.messages.append({"role": "assistant", "content": response})
     
     # ===== TAB 3: LEARN =====
