@@ -74,7 +74,7 @@ st.markdown(
 def load_model():
     """Load the trained transformer model."""
     try:
-        keras_path = './models/buffett_model.keras'
+        keras_path = './models/model.h5'
         
         if os.path.exists(keras_path):
             model = tf.keras.models.load_model(
