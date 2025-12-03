@@ -424,8 +424,13 @@ def call_groq_api(message: str, api_key: str, conversation_history: list = None)
     if not api_key:
         return "❌ No API key provided. Please enter your Groq API key in the sidebar."
     
+    # Aggressively clean the API key - remove ALL whitespace and hidden characters
+    import re as re_clean
+    api_key = api_key.strip()
+    api_key = re_clean.sub(r'\s+', '', api_key)  # Remove all whitespace
+    api_key = ''.join(c for c in api_key if c.isprintable() and not c.isspace())  # Only printable non-space chars
+    
     # Validate API key format
-    api_key = api_key.strip()  # Remove any whitespace
     if not api_key.startswith("gsk_"):
         return f"❌ Invalid API key format. Groq API keys should start with 'gsk_'. Your key starts with '{api_key[:4]}...' - please check your key at console.groq.com/keys"
     
@@ -443,52 +448,61 @@ def call_groq_api(message: str, api_key: str, conversation_history: list = None)
     # Add current message
     messages.append({"role": "user", "content": message})
     
+    # Always use requests for reliability (groq library can have issues)
     try:
-        # Try using the groq library first
-        if GROQ_AVAILABLE:
-            client = Groq(api_key=api_key)
-            chat_completion = client.chat.completions.create(
-                messages=messages,
-                model="llama-3.1-70b-versatile",
-                temperature=0.7,
-                max_tokens=1024,
-            )
-            return chat_completion.choices[0].message.content
-        else:
-            # Fallback to requests
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": "llama-3.1-70b-versatile",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 1024
-            }
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=30
-            )
-            
-            if response.status_code == 401:
-                return f"❌ Authentication failed (401). Your API key was rejected by Groq. Please verify:\n\n1. Key starts with 'gsk_'\n2. Key is copied completely\n3. Key is active at console.groq.com/keys\n\nYour key: {api_key[:8]}...{api_key[-4:]}"
-            
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Try multiple models
+        models_to_try = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama3-70b-8192", 
+            "mixtral-8x7b-32768"
+        ]
+        
+        last_error = None
+        for model in models_to_try:
+            try:
+                data = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 1024
+                }
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    return response.json()["choices"][0]["message"]["content"]
+                elif response.status_code == 401:
+                    # Authentication failed - show details
+                    error_detail = response.text[:300] if response.text else "No details"
+                    last_error = f"401 Auth Error: {error_detail}"
+                    continue
+                else:
+                    last_error = f"Status {response.status_code}: {response.text[:200]}"
+                    continue
+                    
+            except requests.exceptions.Timeout:
+                last_error = "Request timed out"
+                continue
+            except Exception as e:
+                last_error = str(e)
+                continue
+        
+        # If we get here, all models failed
+        return f"❌ API call failed.\n\n**Last error:** {last_error}\n\n**Debug info:**\n- Key length after cleaning: {len(api_key)}\n- Key: {api_key[:8]}...{api_key[-4:]}\n- Using: requests library"
             
     except Exception as e:
         error_msg = str(e)
-        if "401" in error_msg or "invalid" in error_msg.lower() or "unauthorized" in error_msg.lower():
-            return f"❌ Authentication failed. Your API key was rejected.\n\n**Debug info:**\n- Key length: {len(api_key)} chars\n- Key prefix: {api_key[:8]}...\n- Key suffix: ...{api_key[-4:]}\n\n**Please check:**\n1. Key starts with 'gsk_'\n2. Key is complete (not truncated)\n3. Key is active at console.groq.com/keys"
-        elif "rate" in error_msg.lower():
-            return "⏳ Rate limit reached. Please wait a moment and try again."
-        elif "timeout" in error_msg.lower():
-            return "⏳ Request timed out. Please try again."
-        else:
-            return f"❌ Error calling Groq API: {error_msg}\n\n**Debug info:**\n- Key length: {len(api_key)} chars\n- Key prefix: {api_key[:8]}..."
+        return f"❌ Error: {error_msg}\n\n**Debug info:**\n- Key length: {len(api_key)} chars\n- Key prefix: {api_key[:8]}..."
 
 
 def is_model_available():
@@ -1739,7 +1753,10 @@ def main():
             if hasattr(st, 'secrets'):
                 try:
                     if 'GROQ_API_KEY' in st.secrets:
-                        groq_api_key = st.secrets['GROQ_API_KEY'].strip()
+                        raw_key = st.secrets['GROQ_API_KEY']
+                        # Clean the key
+                        groq_api_key = raw_key.strip()
+                        groq_api_key = ''.join(c for c in groq_api_key if c.isprintable() and not c.isspace())
                         key_source = "secrets"
                 except Exception as e:
                     st.warning(f"⚠️ Error reading secrets: {e}")
@@ -1748,11 +1765,17 @@ def main():
                 st.success("✅ API Key loaded from secrets")
                 # Show debug info
                 with st.expander("🔍 Debug Info"):
+                    raw_len = len(st.secrets.get('GROQ_API_KEY', ''))
+                    clean_len = len(groq_api_key)
                     st.code(f"""Key source: {key_source}
-Key length: {len(groq_api_key)} chars
+Raw key length: {raw_len} chars
+Clean key length: {clean_len} chars
+Hidden chars removed: {raw_len - clean_len}
 Key prefix: {groq_api_key[:8]}...
 Key suffix: ...{groq_api_key[-4:]}
 Starts with 'gsk_': {groq_api_key.startswith('gsk_')}""")
+                    if raw_len != clean_len:
+                        st.warning(f"⚠️ Found {raw_len - clean_len} hidden characters in key!")
                     if not groq_api_key.startswith('gsk_'):
                         st.error("⚠️ Key should start with 'gsk_'")
             else:
@@ -1763,10 +1786,13 @@ Starts with 'gsk_': {groq_api_key.startswith('gsk_')}""")
                     key="groq_api_key_input"
                 )
                 if groq_api_key:
+                    raw_key = groq_api_key
                     groq_api_key = groq_api_key.strip()
+                    groq_api_key = ''.join(c for c in groq_api_key if c.isprintable() and not c.isspace())
                     with st.expander("🔍 Debug Info"):
                         st.code(f"""Key source: manual input
-Key length: {len(groq_api_key)} chars
+Raw key length: {len(raw_key)} chars
+Clean key length: {len(groq_api_key)} chars
 Key prefix: {groq_api_key[:8] if len(groq_api_key) >= 8 else groq_api_key}...
 Starts with 'gsk_': {groq_api_key.startswith('gsk_')}""")
                         if not groq_api_key.startswith('gsk_'):
