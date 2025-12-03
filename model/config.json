@@ -1,11 +1,11 @@
 {
-  "vocab_size": 3356,
+  "vocab_size": 3388,
   "max_length": 60,
   "num_layers": 2,
   "d_model": 256,
   "num_heads": 8,
   "units": 512,
   "dropout": 0.1,
-  "start_token": 3354,
-  "end_token": 3355
+  "start_token": 3386,
+  "end_token": 3387
 }
