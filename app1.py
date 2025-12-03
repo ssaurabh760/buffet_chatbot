@@ -29,6 +29,16 @@ try:
 except ImportError:
     TF_AVAILABLE = False
 
+# Try to import Groq for API chatbot
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+
+# Also support requests-based Groq API calls as fallback
+import requests
+
 # ============================================================================
 # CHATBOT MODULE (Integrated for simplicity)
 # ============================================================================
@@ -386,6 +396,85 @@ class BuffettChatbot:
 def load_chatbot():
     """Load the chatbot model (cached)"""
     return BuffettChatbot(MODEL_DIR)
+
+
+# ============================================================================
+# GROQ API CHATBOT
+# ============================================================================
+
+BUFFETT_SYSTEM_PROMPT = """You are Warren Buffett, the legendary investor and CEO of Berkshire Hathaway. 
+You are having a conversation about investing, business, and life wisdom.
+
+Respond in first person as Warren Buffett would, drawing from his well-known investment philosophy:
+- Value investing principles
+- Focus on intrinsic value and margin of safety
+- Long-term holding perspective ("Our favorite holding period is forever")
+- Circle of competence
+- Quality businesses with durable competitive advantages (moats)
+- Importance of management integrity
+- Avoiding speculation and market timing
+- Being fearful when others are greedy and greedy when others are fearful
+
+Keep responses conversational, wise, and occasionally use folksy humor as Buffett is known for.
+Be helpful and educational while staying in character."""
+
+def call_groq_api(message: str, api_key: str, conversation_history: list = None) -> str:
+    """Call the Groq API to get a response from the Buffett chatbot"""
+    
+    if not api_key:
+        return "Please enter your Groq API key in the sidebar to use this chatbot."
+    
+    # Build messages list
+    messages = [{"role": "system", "content": BUFFETT_SYSTEM_PROMPT}]
+    
+    # Add conversation history if provided
+    if conversation_history:
+        for msg in conversation_history[-10:]:  # Keep last 10 messages for context
+            messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    # Add current message
+    messages.append({"role": "user", "content": message})
+    
+    try:
+        # Try using the groq library first
+        if GROQ_AVAILABLE:
+            client = Groq(api_key=api_key)
+            chat_completion = client.chat.completions.create(
+                messages=messages,
+                model="llama-3.1-70b-versatile",
+                temperature=0.7,
+                max_tokens=1024,
+            )
+            return chat_completion.choices[0].message.content
+        else:
+            # Fallback to requests
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "llama-3.1-70b-versatile",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 1024
+            }
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+            
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "invalid" in error_msg.lower():
+            return "❌ Invalid API key. Please check your Groq API key and try again."
+        elif "rate" in error_msg.lower():
+            return "⏳ Rate limit reached. Please wait a moment and try again."
+        else:
+            return f"❌ Error calling Groq API: {error_msg}"
 
 
 def is_model_available():
@@ -1293,7 +1382,7 @@ def main():
         """)
     
     # Main content tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "💬 AI Chatbot", "📚 Learn"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🤖 Groq Chatbot", "🎩 Custom Chatbot", "📚 Learn"])
     
     # Initialize session state
     if 'stock_data' not in st.session_state:
@@ -1302,6 +1391,10 @@ def main():
         st.session_state.current_symbol = None
     if 'quick_symbol' not in st.session_state:
         st.session_state.quick_symbol = None
+    if 'groq_messages' not in st.session_state:
+        st.session_state.groq_messages = []
+    if 'custom_messages' not in st.session_state:
+        st.session_state.custom_messages = []
     
     # Handle quick symbol selection
     if st.session_state.quick_symbol:
@@ -1609,9 +1702,131 @@ def main():
                     st.session_state.quick_symbol = "BRK-B"
                     st.rerun()
     
-    # ===== TAB 2: AI CHATBOT =====
+    # ===== TAB 2: GROQ API CHATBOT =====
     with tab2:
-        st.markdown('<h3 class="section-header">💬 Warren Buffett AI Investment Advisor</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 class="section-header">🤖 Groq API - Warren Buffett Advisor</h3>', unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="buffett-quote">
+            <p>"Risk comes from not knowing what you're doing."</p>
+            <p style="text-align: right; color: #D4AF37;">— Warren Buffett</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # API Key input - check secrets first, then allow manual input
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("### 🔑 Groq API Settings")
+            
+            # Try to get API key from secrets first
+            default_key = ""
+            if hasattr(st, 'secrets') and 'GROQ_API_KEY' in st.secrets:
+                default_key = st.secrets['GROQ_API_KEY']
+                st.success("✅ API Key loaded from secrets")
+                groq_api_key = default_key
+            else:
+                groq_api_key = st.text_input(
+                    "Groq API Key",
+                    type="password",
+                    help="Get your free API key from https://console.groq.com/keys",
+                    key="groq_api_key_input"
+                )
+                if not groq_api_key:
+                    st.info("💡 Get a free API key at [console.groq.com](https://console.groq.com/keys)")
+        
+        # Model info
+        with st.expander("ℹ️ About This Chatbot"):
+            st.markdown("""
+            **Model:** LLaMA 3.1 70B via Groq API
+            
+            **Features:**
+            - Powered by Meta's LLaMA 3.1 70B model
+            - Ultra-fast inference via Groq's LPU technology
+            - Maintains conversation context
+            - Responds in Warren Buffett's voice and philosophy
+            
+            **How to get an API key:**
+            1. Go to [console.groq.com](https://console.groq.com)
+            2. Sign up for a free account
+            3. Navigate to API Keys section
+            4. Create a new API key
+            5. Paste it in the sidebar
+            """)
+        
+        st.markdown("---")
+        
+        # Chat interface
+        st.markdown("### 💬 Chat with Warren Buffett (Groq)")
+        
+        # Clear chat button
+        col1, col2 = st.columns([6, 1])
+        with col2:
+            if st.button("🗑️ Clear", help="Clear chat history", key="clear_groq"):
+                st.session_state.groq_messages = []
+                st.rerun()
+        
+        # Display chat messages
+        chat_container = st.container()
+        with chat_container:
+            for message in st.session_state.groq_messages:
+                with st.chat_message(message["role"], avatar="🧑‍💼" if message["role"] == "user" else "🤖"):
+                    st.markdown(message["content"])
+        
+        # Sample questions
+        if not st.session_state.groq_messages:
+            st.markdown("**Try asking:**")
+            sample_questions_groq = [
+                "What is your investment philosophy?",
+                "How do you evaluate a company's moat?",
+                "What mistakes should investors avoid?",
+                "How do you think about market volatility?",
+                "What advice would you give a new investor?",
+            ]
+            
+            cols = st.columns(3)
+            for i, question in enumerate(sample_questions_groq[:3]):
+                with cols[i]:
+                    if st.button(f"📝 {question[:25]}...", key=f"groq_sample_{i}", help=question):
+                        st.session_state.groq_pending_question = question
+                        st.rerun()
+        
+        # Handle pending question from sample buttons
+        if "groq_pending_question" in st.session_state:
+            prompt = st.session_state.groq_pending_question
+            del st.session_state.groq_pending_question
+            
+            st.session_state.groq_messages.append({"role": "user", "content": prompt})
+            
+            if groq_api_key:
+                response = call_groq_api(prompt, groq_api_key, st.session_state.groq_messages[:-1])
+            else:
+                response = "🔑 Please enter your Groq API key in the sidebar to use this chatbot."
+            
+            st.session_state.groq_messages.append({"role": "assistant", "content": response})
+            st.rerun()
+        
+        # Chat input
+        if prompt := st.chat_input("Ask Warren Buffett anything...", key="groq_chat_input"):
+            # Add user message
+            st.session_state.groq_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user", avatar="🧑‍💼"):
+                st.markdown(prompt)
+            
+            # Generate response
+            with st.chat_message("assistant", avatar="🤖"):
+                if groq_api_key:
+                    with st.spinner("Warren is thinking..."):
+                        response = call_groq_api(prompt, groq_api_key, st.session_state.groq_messages[:-1])
+                else:
+                    response = "🔑 Please enter your Groq API key in the sidebar to use this chatbot."
+                
+                st.markdown(response)
+            
+            st.session_state.groq_messages.append({"role": "assistant", "content": response})
+    
+    # ===== TAB 3: CUSTOM TRANSFORMER CHATBOT =====
+    with tab3:
+        st.markdown('<h3 class="section-header">🎩 Custom Transformer - Warren Buffett Advisor</h3>', unsafe_allow_html=True)
         
         st.markdown("""
         <div class="buffett-quote">
@@ -1628,16 +1843,24 @@ def main():
             chatbot = load_chatbot()
             
             if chatbot.is_loaded():
-                st.success("✅ **Chatbot Ready!** The Warren Buffett AI advisor is trained and ready to answer your questions.")
+                st.success("✅ **Chatbot Ready!** The custom-trained Warren Buffett AI advisor is ready.")
                 
                 # Model info
                 with st.expander("ℹ️ Model Information"):
                     st.markdown(f"""
+                    **Model Type:** Custom Transformer (trained from scratch)
+                    
+                    **Architecture:**
                     - **Model Directory:** `{MODEL_DIR}`
                     - **Vocabulary Size:** {chatbot.config.get('vocab_size', 'N/A')}
                     - **Max Length:** {chatbot.config.get('max_length', 'N/A')}
                     - **Layers:** {chatbot.config.get('num_layers', 'N/A')}
                     - **Model Dimension:** {chatbot.config.get('d_model', 'N/A')}
+                    
+                    **Training:**
+                    - Trained on 1,153 Warren Buffett Q&A pairs
+                    - Custom TensorFlow/Keras implementation
+                    - Runs locally without API calls
                     """)
             else:
                 st.warning("⚠️ Model files found but failed to load. Check the console for errors.")
@@ -1649,7 +1872,7 @@ def main():
                 st.info("""
                 🚀 **Train Your Chatbot!**
                 
-                To enable the AI chatbot:
+                To enable the custom AI chatbot:
                 1. Open `train_chatbot_colab.py` in Google Colab
                 2. Upload your Q&A CSV file with Warren Buffett investment knowledge
                 3. Train the model (takes ~10-30 minutes with GPU)
@@ -1657,7 +1880,7 @@ def main():
                 5. Extract to the `model/` folder in this project
                 
                 Required files in `model/` folder:
-                - `buffett_chatbot_model.h5`
+                - `transformer_weights.weights.h5`
                 - `tokenizer.json`
                 - `config.json`
                 """)
@@ -1665,32 +1888,28 @@ def main():
         st.markdown("---")
         
         # Chat interface
-        st.markdown("### 💬 Chat with the Buffett Bot")
-        
-        # Initialize chat history
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
+        st.markdown("### 💬 Chat with the Custom Buffett Bot")
         
         # Clear chat button
         col1, col2 = st.columns([6, 1])
         with col2:
-            if st.button("🗑️ Clear", help="Clear chat history"):
-                st.session_state.messages = []
+            if st.button("🗑️ Clear", help="Clear chat history", key="clear_custom"):
+                st.session_state.custom_messages = []
                 st.rerun()
         
         # Display chat messages
         chat_container = st.container()
         with chat_container:
-            for message in st.session_state.messages:
+            for message in st.session_state.custom_messages:
                 with st.chat_message(message["role"], avatar="🧑‍💼" if message["role"] == "user" else "🎩"):
                     st.markdown(message["content"])
         
         # Sample questions
-        if not st.session_state.messages:
+        if not st.session_state.custom_messages:
             st.markdown("**Try asking:**")
             sample_questions = [
                 "What is gross margin?",
-                "How does Warren Buffett select stocks?",
+                "How do you select stocks?",
                 "What is a good debt to equity ratio?",
                 "Why does Buffett avoid high R&D companies?",
                 "What makes a company a good investment?",
@@ -1699,16 +1918,16 @@ def main():
             cols = st.columns(3)
             for i, question in enumerate(sample_questions[:3]):
                 with cols[i]:
-                    if st.button(f"📝 {question[:30]}...", key=f"sample_{i}", help=question):
-                        st.session_state.pending_question = question
+                    if st.button(f"📝 {question[:25]}...", key=f"custom_sample_{i}", help=question):
+                        st.session_state.custom_pending_question = question
                         st.rerun()
         
         # Handle pending question from sample buttons
-        if "pending_question" in st.session_state:
-            prompt = st.session_state.pending_question
-            del st.session_state.pending_question
+        if "custom_pending_question" in st.session_state:
+            prompt = st.session_state.custom_pending_question
+            del st.session_state.custom_pending_question
             
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.session_state.custom_messages.append({"role": "user", "content": prompt})
             
             if model_available and chatbot.is_loaded():
                 response = chatbot.chat(prompt)
@@ -1717,13 +1936,13 @@ def main():
             else:
                 response = "🚧 The chatbot model is not loaded. Please train the model first using the Colab notebook."
             
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.custom_messages.append({"role": "assistant", "content": response})
             st.rerun()
         
         # Chat input
-        if prompt := st.chat_input("Ask about Warren Buffett's investment principles..."):
+        if prompt := st.chat_input("Ask about Warren Buffett's investment principles...", key="custom_chat_input"):
             # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.session_state.custom_messages.append({"role": "user", "content": prompt})
             with st.chat_message("user", avatar="🧑‍💼"):
                 st.markdown(prompt)
             
@@ -1739,10 +1958,10 @@ def main():
                 
                 st.markdown(response)
             
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.custom_messages.append({"role": "assistant", "content": response})
     
-    # ===== TAB 3: LEARN =====
-    with tab3:
+    # ===== TAB 4: LEARN =====
+    with tab4:
         st.markdown('<h3 class="section-header">📚 Understanding Buffett\'s Investment Criteria</h3>', unsafe_allow_html=True)
         
         st.markdown("""
