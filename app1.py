@@ -422,7 +422,15 @@ def call_groq_api(message: str, api_key: str, conversation_history: list = None)
     """Call the Groq API to get a response from the Buffett chatbot"""
     
     if not api_key:
-        return "Please enter your Groq API key in the sidebar to use this chatbot."
+        return "❌ No API key provided. Please enter your Groq API key in the sidebar."
+    
+    # Validate API key format
+    api_key = api_key.strip()  # Remove any whitespace
+    if not api_key.startswith("gsk_"):
+        return f"❌ Invalid API key format. Groq API keys should start with 'gsk_'. Your key starts with '{api_key[:4]}...' - please check your key at console.groq.com/keys"
+    
+    if len(api_key) < 20:
+        return f"❌ API key seems too short ({len(api_key)} characters). Please check your key."
     
     # Build messages list
     messages = [{"role": "system", "content": BUFFETT_SYSTEM_PROMPT}]
@@ -464,17 +472,23 @@ def call_groq_api(message: str, api_key: str, conversation_history: list = None)
                 json=data,
                 timeout=30
             )
+            
+            if response.status_code == 401:
+                return f"❌ Authentication failed (401). Your API key was rejected by Groq. Please verify:\n\n1. Key starts with 'gsk_'\n2. Key is copied completely\n3. Key is active at console.groq.com/keys\n\nYour key: {api_key[:8]}...{api_key[-4:]}"
+            
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
             
     except Exception as e:
         error_msg = str(e)
-        if "401" in error_msg or "invalid" in error_msg.lower():
-            return "❌ Invalid API key. Please check your Groq API key and try again."
+        if "401" in error_msg or "invalid" in error_msg.lower() or "unauthorized" in error_msg.lower():
+            return f"❌ Authentication failed. Your API key was rejected.\n\n**Debug info:**\n- Key length: {len(api_key)} chars\n- Key prefix: {api_key[:8]}...\n- Key suffix: ...{api_key[-4:]}\n\n**Please check:**\n1. Key starts with 'gsk_'\n2. Key is complete (not truncated)\n3. Key is active at console.groq.com/keys"
         elif "rate" in error_msg.lower():
             return "⏳ Rate limit reached. Please wait a moment and try again."
+        elif "timeout" in error_msg.lower():
+            return "⏳ Request timed out. Please try again."
         else:
-            return f"❌ Error calling Groq API: {error_msg}"
+            return f"❌ Error calling Groq API: {error_msg}\n\n**Debug info:**\n- Key length: {len(api_key)} chars\n- Key prefix: {api_key[:8]}..."
 
 
 def is_model_available():
@@ -1719,11 +1733,28 @@ def main():
             st.markdown("### 🔑 Groq API Settings")
             
             # Try to get API key from secrets first
-            default_key = ""
-            if hasattr(st, 'secrets') and 'GROQ_API_KEY' in st.secrets:
-                default_key = st.secrets['GROQ_API_KEY']
+            groq_api_key = None
+            key_source = None
+            
+            if hasattr(st, 'secrets'):
+                try:
+                    if 'GROQ_API_KEY' in st.secrets:
+                        groq_api_key = st.secrets['GROQ_API_KEY'].strip()
+                        key_source = "secrets"
+                except Exception as e:
+                    st.warning(f"⚠️ Error reading secrets: {e}")
+            
+            if groq_api_key:
                 st.success("✅ API Key loaded from secrets")
-                groq_api_key = default_key
+                # Show debug info
+                with st.expander("🔍 Debug Info"):
+                    st.code(f"""Key source: {key_source}
+Key length: {len(groq_api_key)} chars
+Key prefix: {groq_api_key[:8]}...
+Key suffix: ...{groq_api_key[-4:]}
+Starts with 'gsk_': {groq_api_key.startswith('gsk_')}""")
+                    if not groq_api_key.startswith('gsk_'):
+                        st.error("⚠️ Key should start with 'gsk_'")
             else:
                 groq_api_key = st.text_input(
                     "Groq API Key",
@@ -1731,7 +1762,16 @@ def main():
                     help="Get your free API key from https://console.groq.com/keys",
                     key="groq_api_key_input"
                 )
-                if not groq_api_key:
+                if groq_api_key:
+                    groq_api_key = groq_api_key.strip()
+                    with st.expander("🔍 Debug Info"):
+                        st.code(f"""Key source: manual input
+Key length: {len(groq_api_key)} chars
+Key prefix: {groq_api_key[:8] if len(groq_api_key) >= 8 else groq_api_key}...
+Starts with 'gsk_': {groq_api_key.startswith('gsk_')}""")
+                        if not groq_api_key.startswith('gsk_'):
+                            st.error("⚠️ Key should start with 'gsk_'")
+                else:
                     st.info("💡 Get a free API key at [console.groq.com](https://console.groq.com/keys)")
         
         # Model info
