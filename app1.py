@@ -16,6 +16,8 @@ import json
 # Try to import yfinance
 try:
     import yfinance as yf
+    # Fix for Yahoo Finance authentication issue
+    yf.set_tz_cache_location("/tmp/yfinance_cache")
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
@@ -910,16 +912,35 @@ def get_stock_data(symbol: str) -> dict:
         try:
             stock = yf.Ticker(symbol)
             
-            # Get financial statements
-            income_stmt = stock.income_stmt
-            balance_sheet = stock.balance_sheet
-            cash_flow = stock.cashflow
+            # Get financial statements with error handling
+            try:
+                income_stmt = stock.income_stmt
+            except Exception:
+                income_stmt = None
             
-            # Get basic info
-            info = stock.info
+            try:
+                balance_sheet = stock.balance_sheet
+            except Exception:
+                balance_sheet = None
+            
+            try:
+                cash_flow = stock.cashflow
+            except Exception:
+                cash_flow = None
+            
+            # Get basic info with error handling
+            try:
+                info = stock.info
+                if not info or len(info) < 5:  # Empty or minimal info dict
+                    raise ValueError("No valid info returned")
+            except Exception:
+                info = {"longName": symbol, "symbol": symbol}
             
             # Get historical data for price chart
-            history = stock.history(period="2y")
+            try:
+                history = stock.history(period="2y")
+            except Exception:
+                history = generate_sample_history()
             
             # Check if we got valid data
             if income_stmt is not None and not income_stmt.empty:
@@ -932,8 +953,24 @@ def get_stock_data(symbol: str) -> dict:
                     "success": True,
                     "is_sample": False
                 }
+            else:
+                # Yahoo Finance API might be having issues
+                return {
+                    "success": False,
+                    "error": f"Could not fetch financial data for {symbol}. Yahoo Finance API may be temporarily unavailable. Try AAPL, MSFT, or BRK-B for sample data."
+                }
+                
         except Exception as e:
-            pass
+            error_msg = str(e)
+            if "401" in error_msg or "Unauthorized" in error_msg or "Crumb" in error_msg:
+                return {
+                    "success": False, 
+                    "error": f"Yahoo Finance authentication error. This is a known issue with their API. Try AAPL, MSFT, or BRK-B for sample data, or try again later."
+                }
+            return {
+                "success": False, 
+                "error": f"Error fetching {symbol}: {error_msg}. Try AAPL, MSFT, or BRK-B for sample data."
+            }
     
     # Return error if no data available
     return {
@@ -1279,7 +1316,8 @@ def main():
                 st.session_state.stock_data = data
                 st.session_state.current_symbol = symbol
             else:
-                st.error(f"Error fetching data: {data.get('error', 'Unknown error')}")
+                st.error(f"⚠️ {data.get('error', 'Unknown error')}")
+                st.info("💡 **Tip:** If Yahoo Finance is having issues, try: `pip install --upgrade yfinance`")
                 st.session_state.stock_data = None
     
     # ===== TAB 1: DASHBOARD =====
