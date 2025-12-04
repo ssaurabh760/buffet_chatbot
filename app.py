@@ -680,10 +680,10 @@ BUFFETT_RATIOS = {
         },
         "tax_rate": {
             "name": "Effective Tax Rate",
-            "threshold": 0.21,
-            "rule": "~21% (Current Corporate Rate)",
-            "comparison": "info",
-            "logic": "Great businesses are so profitable that they are forced to pay their full tax load. Very low rates may indicate accounting tricks."
+            "threshold": 0.15,
+            "rule": "≥ 15% (Paying Fair Share)",
+            "comparison": ">=",
+            "logic": "Great businesses are so profitable that they are forced to pay their full tax load. Very low rates may indicate accounting tricks or unsustainable tax strategies."
         },
         "net_margin": {
             "name": "Net Margin",
@@ -732,9 +732,16 @@ BUFFETT_RATIOS = {
         "treasury_stock_ratio": {
             "name": "Treasury Stock (Buybacks)",
             "threshold": 0,
-            "rule": "Presence indicates buybacks",
-            "comparison": "info",
-            "logic": "Treasury stock represents shares the company has repurchased. Buffett approves of buybacks when done at sensible prices—it increases per-share intrinsic value."
+            "rule": "> $0 (Has Buybacks)",
+            "comparison": ">",
+            "logic": "Treasury stock represents shares the company has repurchased. Buffett approves of buybacks when done at sensible prices—it increases per-share intrinsic value for remaining shareholders."
+        },
+        "roe": {
+            "name": "Return on Equity (ROE)",
+            "threshold": 0.15,
+            "rule": "≥ 15%",
+            "comparison": ">=",
+            "logic": "ROE measures how efficiently a company uses shareholder equity to generate profits. Buffett seeks companies consistently earning 15%+ ROE—a sign of durable competitive advantage."
         }
     },
     "cash_flow": {
@@ -1248,6 +1255,13 @@ def calculate_buffett_ratios(data: dict) -> dict:
             ratios["balance_sheet"]["treasury_stock_ratio"] = abs(treasury_stock) if treasury_stock else 0
         else:
             ratios["balance_sheet"]["treasury_stock_ratio"] = 0  # No buybacks recorded
+        
+        # 6. Return on Equity (ROE)
+        # Need net income from income statement
+        if income_stmt is not None and not income_stmt.empty:
+            net_income = safe_get(income_stmt, ["Net Income", "Net Income Common Stockholders"])
+            if net_income and total_equity and total_equity != 0:
+                ratios["balance_sheet"]["roe"] = net_income / total_equity
     
     # ===== CASH FLOW RATIOS =====
     if cash_flow is not None and not cash_flow.empty:
@@ -1709,6 +1723,19 @@ def main():
                     info["comparison"],
                     info["threshold"],
                     format_type="currency"
+                )
+            
+            with col3:
+                key = "roe"
+                info = BUFFETT_RATIOS["balance_sheet"][key]
+                value = balance_ratios.get(key)
+                display_ratio_card(
+                    info["name"],
+                    value,
+                    info["rule"],
+                    info["logic"],
+                    info["comparison"],
+                    info["threshold"]
                 )
             
             # Show raw balance sheet
