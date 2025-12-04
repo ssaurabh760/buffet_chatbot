@@ -721,6 +721,20 @@ BUFFETT_RATIOS = {
             "rule": "Positive & Growing",
             "comparison": ">",
             "logic": "Growing retained earnings indicate the company is reinvesting profits effectively and building shareholder value."
+        },
+        "preferred_stock_ratio": {
+            "name": "Preferred Stock to Equity",
+            "threshold": 0.05,
+            "rule": "≤ 5% or None",
+            "comparison": "<=",
+            "logic": "Buffett prefers simple capital structures. Preferred stock is a prior claim on earnings before common stockholders, diluting shareholder value."
+        },
+        "treasury_stock_ratio": {
+            "name": "Treasury Stock (Buybacks)",
+            "threshold": 0,
+            "rule": "Presence indicates buybacks",
+            "comparison": "info",
+            "logic": "Treasury stock represents shares the company has repurchased. Buffett approves of buybacks when done at sensible prices—it increases per-share intrinsic value."
         }
     },
     "cash_flow": {
@@ -808,7 +822,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 29943000000,
                 "Cash Cash Equivalents And Short Term Investments": 65171000000,
                 "Retained Earnings": -19154000000,
-                "Total Assets": 364980000000
+                "Total Assets": 364980000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -174239000000
             },
             pd.Timestamp("2023-09-30"): {
                 "Total Debt": 111088000000,
@@ -816,7 +832,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 29965000000,
                 "Cash Cash Equivalents And Short Term Investments": 61555000000,
                 "Retained Earnings": -214000000,
-                "Total Assets": 352583000000
+                "Total Assets": 352583000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -158421000000
             },
             pd.Timestamp("2022-09-24"): {
                 "Total Debt": 120069000000,
@@ -824,7 +842,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 23646000000,
                 "Cash Cash Equivalents And Short Term Investments": 48304000000,
                 "Retained Earnings": -3068000000,
-                "Total Assets": 352755000000
+                "Total Assets": 352755000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -149680000000
             }
         }).T.T,
         "cash_flow": pd.DataFrame({
@@ -890,7 +910,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 18315000000,
                 "Cash Cash Equivalents And Short Term Investments": 75530000000,
                 "Retained Earnings": 173144000000,
-                "Total Assets": 512163000000
+                "Total Assets": 512163000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -66486000000
             },
             pd.Timestamp("2023-06-30"): {
                 "Total Debt": 59965000000,
@@ -898,7 +920,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 34704000000,
                 "Cash Cash Equivalents And Short Term Investments": 111262000000,
                 "Retained Earnings": 118848000000,
-                "Total Assets": 411976000000
+                "Total Assets": 411976000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -61814000000
             }
         }).T.T,
         "cash_flow": pd.DataFrame({
@@ -959,7 +983,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 325200000000,
                 "Cash Cash Equivalents And Short Term Investments": 325200000000,
                 "Retained Earnings": 612400000000,
-                "Total Assets": 1146000000000
+                "Total Assets": 1146000000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -52195000000
             },
             pd.Timestamp("2023-09-30"): {
                 "Total Debt": 127100000000,
@@ -967,7 +993,9 @@ SAMPLE_DATA = {
                 "Cash And Cash Equivalents": 157200000000,
                 "Cash Cash Equivalents And Short Term Investments": 157200000000,
                 "Retained Earnings": 548900000000,
-                "Total Assets": 1005000000000
+                "Total Assets": 1005000000000,
+                "Preferred Stock": 0,
+                "Treasury Stock": -43812000000
             }
         }).T.T,
         "cash_flow": pd.DataFrame({
@@ -1204,6 +1232,22 @@ def calculate_buffett_ratios(data: dict) -> dict:
         # 3. Retained Earnings Growth
         if retained_earnings_current and retained_earnings_previous and retained_earnings_previous != 0:
             ratios["balance_sheet"]["retained_earnings_growth"] = (retained_earnings_current - retained_earnings_previous) / abs(retained_earnings_previous)
+        
+        # 4. Preferred Stock Ratio
+        preferred_stock = safe_get(balance_sheet, ["Preferred Stock", "Preferred Securities Outside Stock Equity", "Redeemable Preferred Stock"])
+        if total_equity and total_equity != 0:
+            if preferred_stock:
+                ratios["balance_sheet"]["preferred_stock_ratio"] = abs(preferred_stock) / total_equity
+            else:
+                ratios["balance_sheet"]["preferred_stock_ratio"] = 0  # No preferred stock - ideal
+        
+        # 5. Treasury Stock (Share Buybacks)
+        treasury_stock = safe_get(balance_sheet, ["Treasury Stock", "Treasury Shares Number"])
+        if treasury_stock is not None:
+            # Treasury stock is typically negative on balance sheet
+            ratios["balance_sheet"]["treasury_stock_ratio"] = abs(treasury_stock) if treasury_stock else 0
+        else:
+            ratios["balance_sheet"]["treasury_stock_ratio"] = 0  # No buybacks recorded
     
     # ===== CASH FLOW RATIOS =====
     if cash_flow is not None and not cash_flow.empty:
@@ -1254,14 +1298,35 @@ def format_ratio(value: float) -> str:
     return f"{value:.2f}x"
 
 
-def display_ratio_card(name: str, value: float, rule: str, logic: str, comparison: str, threshold: float, is_percentage: bool = True):
-    """Display a single ratio as a styled card"""
+def format_currency(value: float) -> str:
+    """Format a large number as currency (in billions)"""
+    if value is None:
+        return "N/A"
+    if value == 0:
+        return "$0 (No Buybacks)"
+    if abs(value) >= 1e9:
+        return f"${abs(value) / 1e9:.2f}B"
+    elif abs(value) >= 1e6:
+        return f"${abs(value) / 1e6:.2f}M"
+    else:
+        return f"${abs(value):,.0f}"
+
+
+def display_ratio_card(name: str, value: float, rule: str, logic: str, comparison: str, threshold: float, is_percentage: bool = True, format_type: str = None):
+    """Display a single ratio as a styled card
+    
+    Args:
+        format_type: 'percentage', 'ratio', or 'currency' (overrides is_percentage if provided)
+    """
     status = evaluate_ratio(value, threshold, comparison)
     
-    if is_percentage:
-        formatted_value = format_percentage(value)
-    else:
+    # Determine formatting
+    if format_type == "currency":
+        formatted_value = format_currency(value)
+    elif format_type == "ratio" or not is_percentage:
         formatted_value = format_ratio(value)
+    else:
+        formatted_value = format_percentage(value)
     
     status_class = f"status-{status}"
     metric_class = f"metric-{status}"
@@ -1614,6 +1679,36 @@ def main():
                     info["logic"],
                     info["comparison"],
                     info["threshold"]
+                )
+            
+            # Second row for Preferred Stock and Treasury Stock
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                key = "preferred_stock_ratio"
+                info = BUFFETT_RATIOS["balance_sheet"][key]
+                value = balance_ratios.get(key)
+                display_ratio_card(
+                    info["name"],
+                    value,
+                    info["rule"],
+                    info["logic"],
+                    info["comparison"],
+                    info["threshold"]
+                )
+            
+            with col2:
+                key = "treasury_stock_ratio"
+                info = BUFFETT_RATIOS["balance_sheet"][key]
+                value = balance_ratios.get(key)
+                display_ratio_card(
+                    info["name"],
+                    value,
+                    info["rule"],
+                    info["logic"],
+                    info["comparison"],
+                    info["threshold"],
+                    format_type="currency"
                 )
             
             # Show raw balance sheet
