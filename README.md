@@ -1,5 +1,6 @@
 # 🐝 AppleBee - Warren Buffett Stock Analysis Dashboard
 
+## Live: https://buffettrecommendations.streamlit.app/
 A comprehensive stock analysis platform that combines Warren Buffett's value investing principles with AI-powered chatbots. Built as a final project for the Master's in Information Systems program at Northeastern University.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
